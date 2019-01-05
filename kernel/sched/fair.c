@@ -733,7 +733,8 @@ static u64 sched_vslice(struct cfs_rq *cfs_rq, struct sched_entity *se)
 #include "pelt.h"
 #ifdef CONFIG_SMP
 
-static int select_idle_sibling(struct task_struct *p, int prev_cpu, int cpu);
+static int select_idle_sibling(struct task_struct *p, int prev_cpu,
+			       int cpu, int target, int sync);
 static unsigned long task_h_load(struct task_struct *p);
 static unsigned long capacity_of(int cpu);
 
@@ -6234,7 +6235,8 @@ static inline bool asym_fits_capacity(int task_util, int cpu)
 /*
  * Try and locate an idle core/thread in the LLC cache domain.
  */
-static int select_idle_sibling(struct task_struct *p, int prev, int target)
+static int select_idle_sibling(struct task_struct *p, int prev, int this_cpu,
+			       int target, int sync)
 {
 	struct sched_domain *sd;
 	unsigned long task_util;
@@ -6249,7 +6251,8 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 		task_util = uclamp_task_util(p);
 	}
 
-	if ((available_idle_cpu(target) || sched_idle_cpu(target)) &&
+	if ((available_idle_cpu(target) || sched_idle_cpu(target) ||
+	    (sync && target == this_cpu && cpu_rq(this_cpu)->nr_running == 1)) &&
 	    asym_fits_capacity(task_util, target))
 		return target;
 
@@ -6767,7 +6770,7 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int wake_flags)
 		new_cpu = find_idlest_cpu(sd, p, cpu, prev_cpu, sd_flag);
 	} else if (wake_flags & WF_TTWU) { /* XXX always ? */
 		/* Fast path */
-		new_cpu = select_idle_sibling(p, prev_cpu, new_cpu);
+		new_cpu = select_idle_sibling(p, prev_cpu, cpu, new_cpu, sync);
 
 		if (want_affine)
 			current->recent_used_cpu = cpu;
