@@ -599,7 +599,7 @@ void do_coredump(const kernel_siginfo_t *siginfo)
 		 * inconsistency of bit flags, since this flag is not protected
 		 * by any locks.
 		 */
-		.mm_flags = mm->flags,
+		.mm_flags = READ_ONCE(mm->flags),
 	};
 
 	audit_core_dumps(siginfo->si_signo);
