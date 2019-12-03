@@ -235,6 +235,15 @@ static inline void local_flush_tlb_all(void)
 	isb();
 }
 
+static inline void local_flush_tlb_asid(unsigned long asid)
+{
+	asid = __TLBI_VADDR(0, __ASID(asid));
+	dsb(nshst);
+	__tlbi(aside1, asid);
+	__tlbi_user(aside1, asid);
+	dsb(nsh);
+}
+
 static inline void flush_tlb_all(void)
 {
 	dsb(ishst);
@@ -243,15 +252,45 @@ static inline void flush_tlb_all(void)
 	isb();
 }
 
+DECLARE_PER_CPU(bool, cpu_not_lazy_tlb);
+
+enum tlb_flush_types {
+	TLB_FLUSH_NO,
+	TLB_FLUSH_LOCAL,
+	TLB_FLUSH_BROADCAST,
+};
+extern enum tlb_flush_types tlb_flush_check(struct mm_struct *mm,
+					    unsigned int cpu);
+
 static inline void flush_tlb_mm(struct mm_struct *mm)
 {
 	unsigned long asid;
+	enum tlb_flush_types flush;
 
-	dsb(ishst);
+	flush = tlb_flush_check(mm, get_cpu());
 	asid = __TLBI_VADDR(0, ASID(mm));
-	__tlbi(aside1is, asid);
-	__tlbi_user(aside1is, asid);
-	dsb(ish);
+	switch (flush) {
+	case TLB_FLUSH_LOCAL:
+
+		dsb(nshst);
+		__tlbi(aside1, asid);
+		__tlbi_user(aside1, asid);
+		dsb(nsh);
+
+		fallthrough;
+	case TLB_FLUSH_NO:
+		put_cpu();
+		break;
+	case TLB_FLUSH_BROADCAST:
+		put_cpu();
+
+		dsb(ishst);
+		__tlbi(aside1is, asid);
+		__tlbi_user(aside1is, asid);
+		dsb(ish);
+
+		break;
+	}
 }
 
 static inline void flush_tlb_page_nosync(struct vm_area_struct *vma,
@@ -268,8 +307,33 @@ static inline void flush_tlb_page_nosync(struct vm_area_struct *vma,
 static inline void flush_tlb_page(struct vm_area_struct *vma,
 				  unsigned long uaddr)
 {
-	flush_tlb_page_nosync(vma, uaddr);
-	dsb(ish);
+	struct mm_struct *mm = vma->vm_mm;
+	unsigned long addr = __TLBI_VADDR(uaddr, ASID(mm));
+	enum tlb_flush_types flush;
+
+	flush = tlb_flush_check(mm, get_cpu());
+	switch (flush) {
+	case TLB_FLUSH_LOCAL:
+
+		dsb(nshst);
+		__tlbi(vale1, addr);
+		__tlbi_user(vale1, addr);
+		dsb(nsh);
+
+		fallthrough;
+	case TLB_FLUSH_NO:
+		put_cpu();
+		break;
+	case TLB_FLUSH_BROADCAST:
+		put_cpu();
+
+		dsb(ishst);
+		__tlbi(vale1is, addr);
+		__tlbi_user(vale1is, addr);
+		dsb(ish);
+
+		break;
+	}
 }
 
 /*
@@ -285,7 +349,9 @@ static inline void __flush_tlb_range(struct vm_area_struct *vma,
 {
 	int num = 0;
 	int scale = 0;
+	struct mm_struct *mm = vma->vm_mm;
 	unsigned long asid, addr, pages;
+	enum tlb_flush_types flush;
 
 	start = round_down(start, stride);
 	end = round_up(end, stride);
@@ -300,64 +366,114 @@ static inline void __flush_tlb_range(struct vm_area_struct *vma,
 	if ((!system_supports_tlb_range() &&
 	     (end - start) >= (MAX_TLBI_OPS * stride)) ||
 	    pages >= MAX_TLBI_RANGE_PAGES) {
-		flush_tlb_mm(vma->vm_mm);
+		flush_tlb_mm(mm);
 		return;
 	}
 
-	dsb(ishst);
-	asid = ASID(vma->vm_mm);
+	flush = tlb_flush_check(mm, get_cpu());
+	asid = ASID(mm);
+	switch (flush) {
+	case TLB_FLUSH_LOCAL:
 
-	/*
-	 * When the CPU does not support TLB range operations, flush the TLB
-	 * entries one by one at the granularity of 'stride'. If the the TLB
-	 * range ops are supported, then:
-	 *
-	 * 1. If 'pages' is odd, flush the first page through non-range
-	 *    operations;
-	 *
-	 * 2. For remaining pages: the minimum range granularity is decided
-	 *    by 'scale', so multiple range TLBI operations may be required.
-	 *    Start from scale = 0, flush the corresponding number of pages
-	 *    ((num+1)*2^(5*scale+1) starting from 'addr'), then increase it
-	 *    until no pages left.
-	 *
-	 * Note that certain ranges can be represented by either num = 31 and
-	 * scale or num = 0 and scale + 1. The loop below favours the latter
-	 * since num is limited to 30 by the __TLBI_RANGE_NUM() macro.
-	 */
-	while (pages > 0) {
-		if (!system_supports_tlb_range() ||
-		    pages % 2 == 1) {
-			addr = __TLBI_VADDR(start, asid);
-			if (last_level) {
-				__tlbi_level(vale1is, addr, tlb_level);
-				__tlbi_user_level(vale1is, addr, tlb_level);
-			} else {
-				__tlbi_level(vae1is, addr, tlb_level);
-				__tlbi_user_level(vae1is, addr, tlb_level);
-			}
-			start += stride;
-			pages -= stride >> PAGE_SHIFT;
-			continue;
-		}
+		dsb(nshst);
 
-		num = __TLBI_RANGE_NUM(pages, scale);
-		if (num >= 0) {
-			addr = __TLBI_VADDR_RANGE(start, asid, scale,
-						  num, tlb_level);
-			if (last_level) {
-				__tlbi(rvale1is, addr);
-				__tlbi_user(rvale1is, addr);
-			} else {
-				__tlbi(rvae1is, addr);
-				__tlbi_user(rvae1is, addr);
+		while (pages > 0) {
+			if (!system_supports_tlb_range() ||
+			    pages % 2 == 1) {
+				addr = __TLBI_VADDR(start, asid);
+				if (last_level) {
+					__tlbi_level(vale1, addr, tlb_level);
+					__tlbi_user_level(vale1, addr, tlb_level);
+				} else {
+					__tlbi_level(vae1, addr, tlb_level);
+					__tlbi_user_level(vae1, addr, tlb_level);
+				}
+				start += stride;
+				pages -= stride >> PAGE_SHIFT;
+				continue;
 			}
-			start += __TLBI_RANGE_PAGES(num, scale) << PAGE_SHIFT;
+
+			num = __TLBI_RANGE_NUM(pages, scale);
+			if (num >= 0) {
+				addr = __TLBI_VADDR_RANGE(start, asid, scale,
+							  num, tlb_level);
+				if (last_level) {
+					__tlbi(rvale1, addr);
+					__tlbi_user(rvale1, addr);
+				} else {
+					__tlbi(rvae1, addr);
+					__tlbi_user(rvae1, addr);
+				}
+				start += __TLBI_RANGE_PAGES(num, scale) << PAGE_SHIFT;
 			pages -= __TLBI_RANGE_PAGES(num, scale);
+			}
+			scale++;
 		}
-		scale++;
+		dsb(nsh);
+
+		fallthrough;
+	case TLB_FLUSH_NO:
+		put_cpu();
+		break;
+	case TLB_FLUSH_BROADCAST:
+		put_cpu();
+
+		dsb(ishst);
+
+		/*
+		 * When the CPU does not support TLB range operations, flush the TLB
+		 * entries one by one at the granularity of 'stride'. If the TLB
+		 * range ops are supported, then:
+		 *
+		 * 1. If 'pages' is odd, flush the first page through non-range
+		 *    operations;
+		 *
+		 * 2. For remaining pages: the minimum range granularity is decided
+		 *    by 'scale', so multiple range TLBI operations may be required.
+		 *    Start from scale = 0, flush the corresponding number of pages
+		 *    ((num+1)*2^(5*scale+1) starting from 'addr'), then increase it
+		 *    until no pages left.
+		 *
+		 * Note that certain ranges can be represented by either num = 31 and
+		 * scale or num = 0 and scale + 1. The loop below favours the latter
+		 * since num is limited to 30 by the __TLBI_RANGE_NUM() macro.
+		 */
+		while (pages > 0) {
+			if (!system_supports_tlb_range() ||
+			    pages % 2 == 1) {
+				addr = __TLBI_VADDR(start, asid);
+				if (last_level) {
+					__tlbi_level(vale1is, addr, tlb_level);
+					__tlbi_user_level(vale1is, addr, tlb_level);
+				} else {
+					__tlbi_level(vae1is, addr, tlb_level);
+					__tlbi_user_level(vae1is, addr, tlb_level);
+				}
+				start += stride;
+				pages -= stride >> PAGE_SHIFT;
+				continue;
+			}
+
+			num = __TLBI_RANGE_NUM(pages, scale);
+			if (num >= 0) {
+				addr = __TLBI_VADDR_RANGE(start, asid, scale,
+							  num, tlb_level);
+				if (last_level) {
+					__tlbi(rvale1is, addr);
+					__tlbi_user(rvale1is, addr);
+				} else {
+					__tlbi(rvae1is, addr);
+					__tlbi_user(rvae1is, addr);
+				}
+				start += __TLBI_RANGE_PAGES(num, scale) << PAGE_SHIFT;
+				pages -= __TLBI_RANGE_PAGES(num, scale);
+			}
+			scale++;
+		}
+		dsb(ish);
+
+		break;
 	}
-	dsb(ish);
 }
 
 static inline void flush_tlb_range(struct vm_area_struct *vma,
