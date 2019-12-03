@@ -24,6 +24,7 @@ typedef struct {
 	refcount_t	pinned;
 	void		*vdso;
 	unsigned long	flags;
+	atomic_t	nr_active_mm;
 } mm_context_t;
 
 /*
@@ -52,7 +53,8 @@ typedef struct {
  * ensure that the page-table walker on CPU 1 *must* see the invalid PTE
  * written by CPU 0.
  */
-#define ASID(mm)	(atomic64_read(&(mm)->context.id) & 0xffff)
+#define __ASID(asid)	((asid) & 0xffff)
+#define ASID(mm)	__ASID(atomic64_read(&(mm)->context.id))
 
 static inline bool arm64_kernel_unmapped_at_el0(void)
 {
