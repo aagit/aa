@@ -103,7 +103,7 @@ static inline void free_screen_info(struct screen_info *si)
 
 static inline void efi_set_pgd(struct mm_struct *mm)
 {
-	__switch_mm(mm);
+	__switch_mm(mm, smp_processor_id());
 
 	if (system_uses_ttbr0_pan()) {
 		if (mm != current->active_mm) {
