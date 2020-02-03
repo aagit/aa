@@ -1358,6 +1358,7 @@ void kthread_use_mm(struct mm_struct *mm)
 		mmgrab(mm);
 		tsk->active_mm = mm;
 	}
+	mmget(mm);
 	tsk->mm = mm;
 	membarrier_update_current_mm(mm);
 	switch_mm_irqs_off(active_mm, mm, tsk);
@@ -1410,6 +1411,7 @@ void kthread_unuse_mm(struct mm_struct *mm)
 	sync_mm_rss(mm);
 	local_irq_disable();
 	tsk->mm = NULL;
+	mmput(mm);
 	membarrier_update_current_mm(NULL);
 	/* active_mm is still 'mm' */
 	enter_lazy_tlb(mm, tsk);
