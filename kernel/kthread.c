@@ -1359,6 +1359,7 @@ void kthread_use_mm(struct mm_struct *mm)
 		mmgrab(mm);
 		tsk->active_mm = mm;
 	}
+	mmget(mm);
 	tsk->mm = mm;
 	membarrier_update_current_mm(mm);
 	switch_mm_irqs_off(active_mm, mm, tsk);
@@ -1398,6 +1399,8 @@ void kthread_unuse_mm(struct mm_struct *mm)
 	WARN_ON_ONCE(!tsk->mm);
 
 	force_uaccess_end(to_kthread(tsk)->oldfs);
+
+	mmput(mm);
 
 	task_lock(tsk);
 	/*
