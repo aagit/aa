@@ -439,6 +439,7 @@ EXPORT_SYMBOL(ioremap_prot);
 void iounmap(volatile void __iomem *addr)
 {
 	struct vm_struct *p, *o;
+	u64 p_start, p_end;
 
 	if ((void __force *)addr <= high_memory)
 		return;
@@ -474,12 +475,17 @@ void iounmap(volatile void __iomem *addr)
 		return;
 	}
 
-	memtype_free(p->phys_addr, p->phys_addr + get_vm_area_size(p));
+	p_start = p->phys_addr;
+	p_end = p_start + get_vm_area_size(p);
+	memtype_free(p_start, p_end);
 
 	/* Finally remove it */
 	o = remove_vm_area((void __force *)addr);
 	BUG_ON(p != o || o == NULL);
 	kfree(p);
+	if (o)
+		memtype_kernel_map_sync(p_start, p_end,
+					_PAGE_CACHE_MODE_WB);
 }
 EXPORT_SYMBOL(iounmap);
 
