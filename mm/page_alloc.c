@@ -1473,6 +1473,7 @@ static void __meminit init_reserved_page(unsigned long pfn)
 {
 	pg_data_t *pgdat;
 	int nid, zid;
+	bool found = false;
 
 	if (!early_page_uninitialised(pfn))
 		return;
@@ -1483,10 +1484,15 @@ static void __meminit init_reserved_page(unsigned long pfn)
 	for (zid = 0; zid < MAX_NR_ZONES; zid++) {
 		struct zone *zone = &pgdat->node_zones[zid];
 
-		if (pfn >= zone->zone_start_pfn && pfn < zone_end_pfn(zone))
+		if (pfn >= zone->zone_start_pfn && pfn < zone_end_pfn(zone)) {
+			found = true;
 			break;
+		}
 	}
-	__init_single_page(pfn_to_page(pfn), pfn, zid, nid);
+	if (likely(found))
+		__init_single_page(pfn_to_page(pfn), pfn, zid, nid);
+	else
+		WARN_ON_ONCE(1);
 }
 #else
 static inline void init_reserved_page(unsigned long pfn)
@@ -6296,7 +6302,7 @@ void __init __weak memmap_init(unsigned long size, int nid,
 			       unsigned long zone,
 			       unsigned long range_start_pfn)
 {
-	unsigned long start_pfn, end_pfn, next_pfn = 0;
+	unsigned long start_pfn, end_pfn, prev_pfn = 0;
 	unsigned long range_end_pfn = range_start_pfn + size;
 	u64 pgcnt = 0;
 	int i;
@@ -6304,7 +6310,7 @@ void __init __weak memmap_init(unsigned long size, int nid,
 	for_each_mem_pfn_range(i, nid, &start_pfn, &end_pfn, NULL) {
 		start_pfn = clamp(start_pfn, range_start_pfn, range_end_pfn);
 		end_pfn = clamp(end_pfn, range_start_pfn, range_end_pfn);
-		next_pfn = clamp(next_pfn, range_start_pfn, range_end_pfn);
+		prev_pfn = clamp(prev_pfn, range_start_pfn, range_end_pfn);
 
 		if (end_pfn > start_pfn) {
 			size = end_pfn - start_pfn;
@@ -6312,10 +6318,10 @@ void __init __weak memmap_init(unsigned long size, int nid,
 					 MEMINIT_EARLY, NULL, MIGRATE_MOVABLE);
 		}
 
-		if (next_pfn < start_pfn)
-			pgcnt += init_unavailable_range(next_pfn, start_pfn,
+		if (prev_pfn < start_pfn)
+			pgcnt += init_unavailable_range(prev_pfn, start_pfn,
 							zone, nid);
-		next_pfn = end_pfn;
+		prev_pfn = end_pfn;
 	}
 
 	/*
@@ -6325,12 +6331,31 @@ void __init __weak memmap_init(unsigned long size, int nid,
 	 * considered initialized. Make sure that memmap has a well defined
 	 * state.
 	 */
-	if (next_pfn < range_end_pfn)
-		pgcnt += init_unavailable_range(next_pfn, range_end_pfn,
+	if (prev_pfn < range_end_pfn)
+		pgcnt += init_unavailable_range(prev_pfn, range_end_pfn,
 						zone, nid);
 
+	/*
+	 * memblock.reserved isn't enforced to overlap with
+	 * memblock.memory so initialize the struct pages for
+	 * memblock.reserved too in case it wasn't overlapping.
+	 *
+	 * If any struct page associated with a memblock.reserved
+	 * range isn't overlapping with a zone range, it'll be left
+	 * uninitialized, ideally with PagePoison, and it'll be a more
+	 * easily detectable error.
+	 */
+	for_each_res_pfn_range(i, nid, &start_pfn, &end_pfn, NULL) {
+		start_pfn = clamp(start_pfn, range_start_pfn, range_end_pfn);
+		end_pfn = clamp(end_pfn, range_start_pfn, range_end_pfn);
+
+		if (end_pfn > start_pfn)
+			pgcnt += init_unavailable_range(start_pfn, end_pfn,
+							zone, nid);
+	}
+
 	if (pgcnt)
-		pr_info("%s: Zeroed struct page in unavailable ranges: %lld\n",
+		pr_info("%s: pages in unavailable ranges: %lld\n",
 			zone_names[zone], pgcnt);
 }
 
@@ -6574,6 +6599,10 @@ void __init get_pfn_range_for_nid(unsigned int nid,
 	*end_pfn = 0;
 
 	for_each_mem_pfn_range(i, nid, &this_start_pfn, &this_end_pfn, NULL) {
+		*start_pfn = min(*start_pfn, this_start_pfn);
+		*end_pfn = max(*end_pfn, this_end_pfn);
+	}
+	for_each_res_pfn_range(i, nid, &this_start_pfn, &this_end_pfn, NULL) {
 		*start_pfn = min(*start_pfn, this_start_pfn);
 		*end_pfn = max(*end_pfn, this_end_pfn);
 	}
@@ -7203,7 +7232,13 @@ unsigned long __init node_map_pfn_alignment(void)
  */
 unsigned long __init find_min_pfn_with_active_regions(void)
 {
-	return PHYS_PFN(memblock_start_of_DRAM());
+	/*
+	 * reserved regions must be included so that their page
+	 * structure can be part of a zone and obtain a valid zoneid
+	 * before __SetPageReserved().
+	 */
+	return min(PHYS_PFN(memblock_start_of_DRAM()),
+		   PHYS_PFN(memblock.reserved.regions[0].base));
 }
 
 /*
