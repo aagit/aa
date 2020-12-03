@@ -251,7 +251,8 @@ static inline bool memblock_is_nomap(struct memblock_region *m)
 int memblock_search_pfn_nid(unsigned long pfn, unsigned long *start_pfn,
 			    unsigned long  *end_pfn);
 void __next_mem_pfn_range(int *idx, int nid, unsigned long *out_start_pfn,
-			  unsigned long *out_end_pfn, int *out_nid);
+			  unsigned long *out_end_pfn, int *out_nid,
+			  struct memblock_type *type);
 
 /**
  * for_each_mem_pfn_range - early memory pfn range iterator
@@ -263,9 +264,17 @@ void __next_mem_pfn_range(int *idx, int nid, unsigned long *out_start_pfn,
  *
  * Walks over configured memory ranges.
  */
-#define for_each_mem_pfn_range(i, nid, p_start, p_end, p_nid)		\
-	for (i = -1, __next_mem_pfn_range(&i, nid, p_start, p_end, p_nid); \
-	     i >= 0; __next_mem_pfn_range(&i, nid, p_start, p_end, p_nid))
+#define for_each_mem_pfn_range(i, nid, p_start, p_end, p_nid)		  \
+	for (i = -1, __next_mem_pfn_range(&i, nid, p_start, p_end, p_nid, \
+					  &memblock.memory);		  \
+	     i >= 0; __next_mem_pfn_range(&i, nid, p_start, p_end, p_nid, \
+					  &memblock.memory))
+
+#define for_each_res_pfn_range(i, nid, p_start, p_end, p_nid)		  \
+	for (i = -1, __next_mem_pfn_range(&i, nid, p_start, p_end, p_nid, \
+					  &memblock.reserved);		  \
+	     i >= 0; __next_mem_pfn_range(&i, nid, p_start, p_end, p_nid, \
+					  &memblock.reserved))
 
 #ifdef CONFIG_DEFERRED_STRUCT_PAGE_INIT
 void __next_mem_pfn_range_in_zone(u64 *idx, struct zone *zone,

@@ -64,7 +64,8 @@ void __dump_page(struct page *page, const char *reason)
 	 * dump_page() when detected.
 	 */
 	if (page_poisoned) {
-		pr_warn("page:%px is uninitialized and poisoned", page);
+		pr_warn("page:%px pfn:%ld is uninitialized and poisoned",
+			page, page_to_pfn(page));
 		goto hex_only;
 	}
 
