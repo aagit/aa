@@ -1201,6 +1201,11 @@ static ssize_t clear_refs_write(struct file *file, const char __user *buf,
 	type = (enum clear_refs_types)itype;
 	if (type < CLEAR_REFS_ALL || type >= CLEAR_REFS_LAST)
 		return -EINVAL;
+	if (!VM_SOFTDIRTY && type == CLEAR_REFS_SOFT_DIRTY) {
+		printk_once(KERN_WARNING
+			    "soft_dirty: missing CONFIG_MEM_SOFT_DIRTY=y\n");
+		return -EINVAL;
+	}
 
 	task = get_proc_task(file_inode(file));
 	if (!task)
