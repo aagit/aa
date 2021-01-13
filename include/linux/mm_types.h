@@ -142,6 +142,12 @@ struct page {
 			atomic_t hpage_pinned_refcount;
 			/* For both global and memcg */
 			struct list_head deferred_list;
+			/*
+			 * mapcount_seqcount is serialized by the
+			 * PG_locked bit spinlock still from the
+			 * second tail page.
+			 */
+			unsigned long mapcount_seqcount;
 		};
 		struct {	/* Page table pages */
 			unsigned long _pt_pad_1;	/* compound_head */
