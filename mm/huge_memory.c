@@ -1273,6 +1273,45 @@ unlock:
 	spin_unlock(vmf->ptl);
 }
 
+/*
+ * This a lockless check for compound THP pages mapped in the pmd
+ * equivalent that is equivalent to "page_trans_huge_mapcount() > 1".
+ * This is faster because by returning a boolean, instead of the exact
+ * value, it is allowed to return false without scanning all subpages.
+ */
+static bool page_trans_huge_anon_shared(struct page *page)
+{
+	int i, mapcount;
+	unsigned int seqcount;
+
+	/* hugetlbfs shouldn't call it */
+	VM_BUG_ON_PAGE(PageHuge(page), page);
+	VM_BUG_ON_PAGE(!PageTransHuge(page), page);
+
+again:
+	seqcount = page_mapcount_seq_begin(page);
+	mapcount = compound_mapcount(page);
+	if (mapcount > 1) {
+		if (page_mapcount_seq_retry(page, seqcount))
+			goto again;
+		return true;
+	}
+	if (PageDoubleMap(page))
+		mapcount -= 1;
+	for (i = 0; i < thp_nr_pages(page); i++) {
+		int _mapcount = atomic_read(&page[i]._mapcount) + 1;
+		if (_mapcount + mapcount > 1) {
+			if (page_mapcount_seq_retry(page, seqcount))
+				goto again;
+			return true;
+		}
+	}
+	if (page_mapcount_seq_retry(page, seqcount))
+		goto again;
+
+	return false;
+}
+
 vm_fault_t do_huge_pmd_wp_page(struct vm_fault *vmf, pmd_t orig_pmd)
 {
 	struct vm_area_struct *vma = vmf->vma;
@@ -1294,6 +1333,9 @@ vm_fault_t do_huge_pmd_wp_page(struct vm_fault *vmf, pmd_t orig_pmd)
 
 	page = pmd_page(orig_pmd);
 	VM_BUG_ON_PAGE(!PageCompound(page) || !PageHead(page), page);
+
+	if (page_trans_huge_anon_shared(page))
+		goto copy;
 
 	/* Lock page for reuse_swap_page() */
 	if (!trylock_page(page)) {
@@ -1326,6 +1368,7 @@ vm_fault_t do_huge_pmd_wp_page(struct vm_fault *vmf, pmd_t orig_pmd)
 	}
 
 	unlock_page(page);
+copy:
 	spin_unlock(vmf->ptl);
 fallback:
 	__split_huge_pmd(vma, vmf->pmd, vmf->address, false, NULL);
