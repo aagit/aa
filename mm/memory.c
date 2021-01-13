@@ -3118,6 +3118,41 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 		if (PageKsm(vmf->page) && (PageSwapCache(vmf->page) ||
 					   page_count(vmf->page) != 1))
 			goto copy;
+
+		/*
+		 * Optimize away the trylock_page for mapcount > 1.
+		 *
+		 * We need to provide full accuracy and avoid spurious
+		 * COWs to avoid breaking the long term GUP pins if
+		 * the anon page is exclusive as in mapcount == 1. If
+		 * we find the mapcount at any time elevated above 1
+		 * for a non THP page, it means any GUP pin already
+		 * might have lost synchrony. So there's no need to
+		 * take any PG_lock to freeze the mapcount since it
+		 * means there was no long term GUP pin in the first
+		 * place on this page. The long term GUP pin must
+		 * un-share any page and turn their mapcount == 1. If
+		 * COWs are still allowed to happen by userland on a
+		 * GUP pinned pages with multiple mm mapping it
+		 * simultaneously, there is no mechanism in the MM
+		 * that can guarantee the copy happens in the mm that
+		 * doesn't hold the GUP pin.
+		 *
+		 * It is possible that if mapcount is found > 1 while
+		 * munmap or exit or MADV_DONTNEED in the parent is
+		 * running concurrently to the COW fault and that the
+		 * mapcount is concurrently on its way to return equal
+		 * 1, but no guarantee was provided anyway in such
+		 * case that the GUP pin would not be erroneously
+		 * copied and that synchrony with the CPU wouldn't be
+		 * lost if only the timing was any different. So all
+		 * it matters to avoid breaking long term GUP pins, is
+		 * that there are no false positive COWs when mapcount
+		 * is found equal 1.
+		 */
+		if (page_mapcount(vmf->page) > 1)
+			goto copy;
+
 		if (!trylock_page(vmf->page)) {
 			get_page(vmf->page);
 			pte_unmap_unlock(vmf->pte, vmf->ptl);
