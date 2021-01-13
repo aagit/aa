@@ -1211,25 +1211,36 @@ void page_add_file_rmap(struct page *page, bool compound)
 	VM_BUG_ON_PAGE(compound && !PageTransHuge(page), page);
 	lock_page_memcg(page);
 	if (compound && PageTransHuge(page)) {
+		bool last;
+		page_mapcount_lock(page);
 		for (i = 0, nr = 0; i < thp_nr_pages(page); i++) {
 			if (atomic_inc_and_test(&page[i]._mapcount))
 				nr++;
 		}
-		if (!atomic_inc_and_test(compound_mapcount_ptr(page)))
+		last = atomic_inc_and_test(compound_mapcount_ptr(page));
+		page_mapcount_unlock(page);
+		if (!last)
 			goto out;
 		if (PageSwapBacked(page))
 			__inc_node_page_state(page, NR_SHMEM_PMDMAPPED);
 		else
 			__inc_node_page_state(page, NR_FILE_PMDMAPPED);
 	} else {
+		struct page *head = NULL;
+		bool last;
 		if (PageTransCompound(page) && page_mapping(page)) {
 			VM_WARN_ON_ONCE(!PageLocked(page));
 
+			head = compound_head(page);
+			page_mapcount_lock(head);
 			SetPageDoubleMap(compound_head(page));
 			if (PageMlocked(page))
 				clear_page_mlock(compound_head(page));
 		}
-		if (!atomic_inc_and_test(&page->_mapcount))
+		last = atomic_inc_and_test(&page->_mapcount);
+		if (head)
+			page_mapcount_unlock(head);
+		if (!last)
 			goto out;
 	}
 	__mod_lruvec_page_state(page, NR_FILE_MAPPED, nr);
@@ -1294,6 +1305,7 @@ static void page_remove_anon_compound_rmap(struct page *page)
 
 	__dec_lruvec_page_state(page, NR_ANON_THPS);
 
+	page_mapcount_lock(page);
 	if (TestClearPageDoubleMap(page)) {
 		/*
 		 * Subpages can be mapped with PTEs too. Check how many of
@@ -1303,6 +1315,7 @@ static void page_remove_anon_compound_rmap(struct page *page)
 			if (atomic_add_negative(-1, &page[i]._mapcount))
 				nr++;
 		}
+		page_mapcount_unlock(page);
 
 		/*
 		 * Queue the page for deferred split if at least one small
@@ -1312,6 +1325,7 @@ static void page_remove_anon_compound_rmap(struct page *page)
 		if (nr && nr < thp_nr_pages(page))
 			deferred_split_huge_page(page);
 	} else {
+		page_mapcount_unlock(page);
 		nr = thp_nr_pages(page);
 	}
 
