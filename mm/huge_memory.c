@@ -2128,6 +2128,11 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 	pgtable = pgtable_trans_huge_withdraw(mm, pmd);
 	pmd_populate(mm, &_pmd, pgtable);
 
+	/*
+	 * lock_page_memcg() is taken before page_mapcount_lock() in
+	 * page_remove_anon_compound_rmap().
+	 */
+	lock_page_memcg(page);
 	page_mapcount_lock(page);
 
 	for (i = 0, addr = haddr; i < HPAGE_PMD_NR; i++, addr += PAGE_SIZE) {
@@ -2176,7 +2181,6 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 				atomic_inc(&page[i]._mapcount);
 		}
 
-		lock_page_memcg(page);
 		if (atomic_add_negative(-1, compound_mapcount_ptr(page))) {
 			/* Last compound_mapcount is gone. */
 			__dec_lruvec_page_state(page, NR_ANON_THPS);
@@ -2186,7 +2190,6 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 					atomic_dec(&page[i]._mapcount);
 			}
 		}
-		unlock_page_memcg(page);
 	}
 
 	/*
@@ -2195,6 +2198,7 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 	 * page_mapcount_unlock().
 	 */
 	page_mapcount_unlock(page);
+	unlock_page_memcg(page);
 
 	pmd_populate(mm, pmd, pgtable);
 
