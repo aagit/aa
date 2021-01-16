@@ -571,6 +571,9 @@ static inline bool page_mapcount_seq_retry(struct page *page,
 
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
 
+extern bool page_trans_huge_anon_shared(struct page *);
+extern bool page_trans_huge_anon_shared_irqsafe(struct page *);
+
 /**
  * thp_size - Size of a transparent huge page.
  * @page: Head page of a transparent huge page.
