@@ -29,6 +29,55 @@ struct follow_page_context {
 	unsigned int page_mask;
 };
 
+/*
+ * For a page wrprotected in the pgtable, which pages do we need to
+ * unshare with copy-on-read (COR) for the GUP pin to remain coherent
+ * with the MM?
+ *
+ * This only provides full coherency to short term pins: FOLL_LONGTERM
+ * still needs to specify FOLL_WRITE|FOLL_FORCE in the caller and in
+ * turn it still risks inefficiency and to lose coherency with the MM
+ * in various cases.
+ */
+static __always_inline bool __gup_must_unshare(unsigned int flags,
+					       struct page *page,
+					       bool is_head, bool irq_safe)
+{
+	if (flags & FOLL_WRITE)
+		return false;
+	if (!PageAnon(page))
+		return false;
+	if (PageKsm(page))
+		return false;
+	if (PageHuge(page)) /* FIXME */
+		return false;
+	if (is_head) {
+		if (PageTransHuge(page)) {
+			if (!irq_safe || likely(!irq_count()))
+				return page_trans_huge_anon_shared(page);
+			return page_trans_huge_anon_shared_irqsafe(page);
+		}
+		BUG();
+	} else {
+		if (!irq_safe || likely(!irq_count()))
+			return page_mapcount(page) > 1;
+		return page_anon_shared_irqsafe(page);
+	}
+}
+
+/* requires full accuracy */
+bool gup_must_unshare(unsigned int flags, struct page *page, bool is_head)
+{
+	return __gup_must_unshare(flags, page, is_head, false);
+}
+
+/* false positives are allowed, false negatives not allowed */
+bool gup_must_unshare_irqsafe(unsigned int flags, struct page *page,
+			      bool is_head)
+{
+	return __gup_must_unshare(flags, page, is_head, true);
+}
+
 static void hpage_pincount_add(struct page *page, int refs)
 {
 	VM_BUG_ON_PAGE(!hpage_pincount_available(page), page);
