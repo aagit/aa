@@ -537,6 +537,20 @@ retry:
 		goto retry;
 	}
 
+	/*
+	 * Anon COW shared pages with another mm must be un-shared
+	 * before GUP pinning. Otherwise if the shared page is
+	 * unmapped from this mm the other mm could re-use it while
+	 * this mm can still read it through the GUP pin.
+	 *
+	 * This needs to set FOLL_UNSHARE and keep retrying the
+	 * unshare until the page becomes exclusive.
+	 */
+	if (!pte_write(pte) &&
+	    gup_must_unshare(flags, page, false)) {
+		page = ERR_PTR(-EMLINK);
+		goto out;
+	}
 	/* try_grab_page() does nothing unless FOLL_GET or FOLL_PIN is set. */
 	if (unlikely(!try_grab_page(page, flags))) {
 		page = ERR_PTR(-ENOMEM);
@@ -936,6 +950,11 @@ static int faultin_page(struct vm_area_struct *vma,
 		 */
 		fault_flags |= FAULT_FLAG_TRIED;
 	}
+	if (*flags & FOLL_UNSHARE) {
+		fault_flags |= FAULT_FLAG_UNSHARE;
+		/* FAULT_FLAG_WRITE and FAULT_FLAG_UNSHARE are incompatible */
+		VM_BUG_ON(fault_flags & FAULT_FLAG_WRITE);
+	}
 
 	ret = handle_mm_fault(vma, address, fault_flags, NULL);
 	if (ret & VM_FAULT_ERROR) {
@@ -1149,6 +1168,7 @@ retry:
 
 		page = follow_page_mask(vma, start, foll_flags, &ctx);
 		if (!page) {
+faultin_page:
 			ret = faultin_page(vma, start, &foll_flags, locked);
 			switch (ret) {
 			case 0:
@@ -1170,6 +1190,9 @@ retry:
 			 * struct page.
 			 */
 			goto next_page;
+		} else if (PTR_ERR(page) == -EMLINK) {
+			foll_flags |= FOLL_UNSHARE;
+			goto faultin_page;
 		} else if (IS_ERR(page)) {
 			ret = PTR_ERR(page);
 			goto out;
@@ -2235,6 +2258,12 @@ static int gup_pte_range(pmd_t pmd, unsigned long addr, unsigned long end,
 			goto pte_unmap;
 		}
 
+		if (!pte_write(pte) &&
+		    gup_must_unshare_irqsafe(flags, page, false)) {
+			put_compound_head(head, 1, flags);
+			goto pte_unmap;
+		}
+
 		VM_BUG_ON_PAGE(compound_head(page) != head, page);
 
 		/*
@@ -2475,6 +2504,12 @@ static int gup_huge_pmd(pmd_t orig, pmd_t *pmdp, unsigned long addr,
 		return 0;
 
 	if (unlikely(pmd_val(orig) != pmd_val(*pmdp))) {
+		put_compound_head(head, refs, flags);
+		return 0;
+	}
+
+	if (!pmd_write(orig) &&
+	    gup_must_unshare_irqsafe(flags, head, true)) {
 		put_compound_head(head, refs, flags);
 		return 0;
 	}
