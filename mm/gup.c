@@ -57,6 +57,9 @@ static __always_inline bool __gup_must_unshare(unsigned int flags,
 {
 	if (flags & FOLL_WRITE)
 		return false;
+	/* mmu notifier doesn't need unshare */
+	if (!(flags & (FOLL_GET|FOLL_PIN)))
+		return false;
 	if (!PageAnon(page))
 		return false;
 	if (PageKsm(page))
