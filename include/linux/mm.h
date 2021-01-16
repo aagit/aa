@@ -464,6 +464,7 @@ extern pgprot_t protection_map[16];
 #define FAULT_FLAG_REMOTE			0x80
 #define FAULT_FLAG_INSTRUCTION  		0x100
 #define FAULT_FLAG_INTERRUPTIBLE		0x200
+#define FAULT_FLAG_UNSHARE			0x400
 
 /*
  * The default fault flags that should be used by most of the
@@ -2811,6 +2812,7 @@ struct page *follow_page(struct vm_area_struct *vma, unsigned long address,
 #define FOLL_SPLIT_PMD	0x20000	/* split huge pmd before returning */
 #define FOLL_PIN	0x40000	/* pages must be released via unpin_user_page */
 #define FOLL_FAST_ONLY	0x80000	/* gup_fast: prevent fall-back to slow gup */
+#define FOLL_UNSHARE	0x100000/* gup: unshare anon page with mapcount > 1 */
 
 /*
  * FOLL_PIN and FOLL_LONGTERM may be used in various combinations with each
@@ -2877,6 +2879,56 @@ static inline int vm_fault_to_errno(vm_fault_t vm_fault, int foll_flags)
 	if (vm_fault & (VM_FAULT_SIGBUS | VM_FAULT_SIGSEGV))
 		return -EFAULT;
 	return 0;
+}
+
+/*
+ * For a page wrprotected in the pgtable, which pages do we need to
+ * unshare with copy-on-read (COR) for the GUP pin to remain coherent
+ * with the MM?
+ *
+ * This only provides full coherency to short term pins: FOLL_LONGTERM
+ * still needs to specify FOLL_WRITE|FOLL_FORCE in the caller and in
+ * turn it still risks inefficiency and to lose coherency with the MM
+ * in various cases.
+ */
+static inline bool __gup_page_unshare(unsigned int flags, struct page *page,
+				      bool is_head, bool irq_safe)
+{
+	if (flags & FOLL_WRITE)
+		return false;
+	if (!PageAnon(page))
+		return false;
+	if (PageKsm(page))
+		return false;
+	if (PageHuge(page)) /* FIXME */
+		return false;
+	if (is_head) {
+		if (PageTransHuge(page)) {
+			if (!irq_safe || likely(!irq_count()))
+				return page_trans_huge_anon_shared(page);
+			return page_trans_huge_anon_shared_irqsafe(page);
+		}
+		BUG();
+	} else {
+		if (!irq_safe || likely(!irq_count()))
+			return page_mapcount(page) > 1;
+		return page_anon_shared_irqsafe(page);
+	}
+}
+
+/* requires full accuracy */
+static inline bool gup_page_unshare(unsigned int flags, struct page *page,
+				    bool is_head)
+{
+	return __gup_page_unshare(flags, page, is_head, false);
+}
+
+/* false positives are allowed, false negatives not allowed */
+static inline bool gup_page_unshare_irqsafe(unsigned int flags,
+					    struct page *page,
+					    bool is_head)
+{
+	return __gup_page_unshare(flags, page, is_head, true);
 }
 
 typedef int (*pte_fn_t)(pte_t *pte, unsigned long addr, void *data);
