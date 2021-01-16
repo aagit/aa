@@ -3136,6 +3136,33 @@ static __always_inline vm_fault_t wp_page_unshare_copy(struct vm_fault *vmf)
 	return __wp_page_copy(vmf, true);
 }
 
+static bool smart_lock_page(struct vm_fault *vmf)
+{
+	if (!trylock_page(vmf->page)) {
+		get_page(vmf->page);
+		pte_unmap_unlock(vmf->pte, vmf->ptl);
+		lock_page(vmf->page);
+		vmf->pte = pte_offset_map_lock(vmf->vma->vm_mm, vmf->pmd,
+					       vmf->address,
+					       &vmf->ptl);
+		if (!pte_same(*vmf->pte, vmf->orig_pte)) {
+			unlock_page(vmf->page);
+			pte_unmap_unlock(vmf->pte, vmf->ptl);
+			put_page(vmf->page);
+			return false;
+		}
+		put_page(vmf->page);
+	}
+	return true;
+}
+
+static vm_fault_t __wp_page_unshare(struct vm_fault *vmf)
+{
+	get_page(vmf->page);
+	pte_unmap_unlock(vmf->pte, vmf->ptl);
+	return wp_page_unshare_copy(vmf);
+}
+
 /*
  * After a read page pin (i.e. FOLL_WRITE not set) is taken on a
  * shared anonymous COW page, its holder can read the page content. If
@@ -3184,10 +3211,22 @@ static vm_fault_t wp_page_unshare(struct vm_fault *vmf)
 	__releases(vmf->ptl)
 {
 	vmf->page = vm_normal_page(vmf->vma, vmf->address, vmf->orig_pte);
-	if (vmf->page && PageAnon(vmf->page) && page_mapcount(vmf->page) > 1) {
-		get_page(vmf->page);
-		pte_unmap_unlock(vmf->pte, vmf->ptl);
-		return wp_page_unshare_copy(vmf);
+	if (vmf->page && PageAnon(vmf->page)) {
+		bool must_unshare;
+		if (page_mapcount(vmf->page) > 1)
+			return __wp_page_unshare(vmf);
+		/*
+		 * NOTE: the mapcount of the anon page is 1 here, so
+		 * there's not going to be much contention on the page
+		 * lock and this call won't risk to end up waiting on
+		 * a long waitqueue.
+		 */
+		if (!smart_lock_page(vmf))
+			return 0;
+		must_unshare = !reuse_swap_page(vmf->page, NULL);
+		unlock_page(vmf->page);
+		if (must_unshare)
+			return __wp_page_unshare(vmf);
 	}
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 	return 0;
