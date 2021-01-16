@@ -2888,6 +2888,9 @@ static inline bool gup_page_unshare_irqsafe(unsigned int flags,
 {
 	if (flags & FOLL_WRITE)
 		return false;
+	/* mmu notifier doesn't need unshare */
+	if (!(flags & (FOLL_GET|FOLL_PIN)))
+		return false;
 	if (!PageAnon(page))
 		return false;
 	if (PageKsm(page)) /* FIXME */
@@ -2908,6 +2911,9 @@ static inline bool gup_page_unshare(unsigned int flags,
 				    bool is_head)
 {
 	if (flags & FOLL_WRITE)
+		return false;
+	/* mmu notifier doesn't need unshare */
+	if (!(flags & (FOLL_GET|FOLL_PIN)))
 		return false;
 	if (!PageAnon(page))
 		return false;
