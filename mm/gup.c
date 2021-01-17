@@ -50,7 +50,7 @@ static __always_inline bool __gup_must_unshare(unsigned int flags,
 	if (!PageAnon(page))
 		return false;
 	if (PageKsm(page))
-		return false;
+		return !!(flags & FOLL_MM_SYNC);
 	if (PageHuge(page)) /* FIXME */
 		return false;
 	if (is_head) {
