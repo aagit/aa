@@ -5553,7 +5553,7 @@ long follow_hugetlb_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		    (!huge_pte_write(pteval) &&
 		     ((flags & FOLL_WRITE) ||
 		      (unshare = gup_must_unshare(flags, pte_page(pteval),
-						  true))))) {
+						  true, vma))))) {
 			vm_fault_t ret;
 			unsigned int fault_flags = 0;
 
@@ -6255,6 +6255,7 @@ follow_huge_pmd_pte(struct vm_area_struct *vma, unsigned long address, int flags
 			 (FOLL_PIN | FOLL_GET)))
 		return NULL;
 
+	mm = vma->vm_mm;
 retry:
 	ptep = huge_pte_offset(mm, address, huge_page_size(h));
 	if (!ptep)
@@ -6275,7 +6276,7 @@ retry:
 		 * check here is just in case.
 		 */
 		if (!huge_pte_write(pte) &&
-		    gup_must_unshare(flags, head_page, true)) {
+		    gup_must_unshare(flags, head_page, true, vma)) {
 			page = NULL;
 			goto out;
 		}
