@@ -3044,11 +3044,52 @@ static vm_fault_t wp_page_unshare(struct vm_fault *vmf)
 	__releases(vmf->ptl)
 {
 	vmf->page = vm_normal_page(vmf->vma, vmf->address, vmf->orig_pte);
-	if (vmf->page && PageAnon(vmf->page) && page_mapcount(vmf->page) > 1) {
-		get_page(vmf->page);
-		pte_unmap_unlock(vmf->pte, vmf->ptl);
-		return wp_page_unshare_copy(vmf);
-	}
+	if (!vmf->page)
+		goto out_unlock;
+	if (PageKsm(vmf->page)) {
+		/*
+		 * A un-share copy-on-read is always required for a
+		 * PageKsm even when mapcount is 1, because no GUP pin
+		 * is allowed on any PageKsm. However in such case we
+		 * can try to turn a PageKsm in a PageAnon in zerocopy.
+		 */
+		if (page_mapcount(vmf->page) == 1) {
+			bool reused;
+			if (trylock_page(vmf->page)) {
+				reused = reuse_ksm_page(vmf->page, vmf->vma,
+							vmf->address);
+				unlock_page(vmf->page);
+				if (reused) {
+					/*
+					 * After the successful
+					 * conversion from PageKsm to
+					 * PageAnon leave it
+					 * wrprotected and re-take the
+					 * fault. No change to the
+					 * pgtable is needed.
+					 */
+					VM_WARN_ON(pte_write(vmf->orig_pte));
+					goto out_unlock;
+				}
+			}
+		}
+	} else if (!PageAnon(vmf->page) || page_mapcount(vmf->page) == 1)
+		goto out_unlock;
+
+	/*
+	 * This does the page copy. Here the page can only be PageAnon
+	 * (which includes PageKsm).
+	 *
+	 * PageKsm copies in un-share even for mapcount == 1 too, if
+	 * the page_ksm_page reuse didn't succeed.
+	 *
+	 * PageAnon copies in un-share only for mapcount > 1.
+	 */
+	get_page(vmf->page);
+	pte_unmap_unlock(vmf->pte, vmf->ptl);
+	return wp_page_unshare_copy(vmf);
+
+out_unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 	return 0;
 }

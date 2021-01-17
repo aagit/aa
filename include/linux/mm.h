@@ -2893,10 +2893,10 @@ static inline bool gup_page_unshare_irqsafe(unsigned int flags,
 		return false;
 	if (!PageAnon(page))
 		return false;
-	if (PageKsm(page)) /* FIXME */
-		return false;
 	if (PageHuge(page)) /* FIXME */
 		return false;
+	if (PageKsm(page))
+		return true;
 	if (is_head) {
 		if (PageTransHuge(page))
 			return page_trans_huge_anon_shared_irqsafe(page);
@@ -2917,10 +2917,10 @@ static inline bool gup_page_unshare(unsigned int flags,
 		return false;
 	if (!PageAnon(page))
 		return false;
-	if (PageKsm(page)) /* FIXME */
-		return false;
 	if (PageHuge(page)) /* FIXME */
 		return false;
+	if (PageKsm(page))
+		return true;
 	if (is_head) {
 		if (PageTransHuge(page))
 			return page_trans_huge_anon_shared(page);
