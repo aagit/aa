@@ -3048,7 +3048,9 @@ static vm_fault_t wp_page_unshare(struct vm_fault *vmf)
 	bool longterm = !!(vmf->flags & FAULT_FLAG_UNSHARE_LT);
 	vmf->page = vm_normal_page(vmf->vma, vmf->address, vmf->orig_pte);
 	if (!vmf->page) {
-		goto out_unlock;
+		if (!longterm || !is_zero_pfn(pte_pfn(vmf->orig_pte)) ||
+		    (vmf->vma->vm_flags & VM_SHARED))
+			goto out_unlock;
 	} else if (PageKsm(vmf->page)) {
 		if (!longterm)
 			goto out_unlock;
@@ -3082,16 +3084,21 @@ static vm_fault_t wp_page_unshare(struct vm_fault *vmf)
 				}
 			}
 		}
-	} else if (!PageAnon(vmf->page) || page_mapcount(vmf->page) == 1)
+	} else if (!PageAnon(vmf->page)) {
+		if (!longterm || vmf->vma->vm_flags & VM_SHARED)
+			goto out_unlock;
+	} else if (page_mapcount(vmf->page) == 1)
 		goto out_unlock;
 
 	/*
 	 * This does the page copy. Here the page can only be PageAnon
-	 * (which includes PageKsm).
+	 * (which includes PageKsm), or a zeropage or a MAP_PRIVATE
+	 * pagecache.
 	 *
 	 * PageAnon must not COR unless mapcount > 1.
 	 */
-	get_page(vmf->page);
+	if (vmf->page)
+		get_page(vmf->page);
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 	return wp_page_unshare_copy(vmf);
 
