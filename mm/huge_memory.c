@@ -1434,7 +1434,7 @@ struct page *follow_trans_huge_pmd(struct vm_area_struct *vma,
 
 	/* see comment about FOLL_UNSHARE in mm/gup.c */
 	if (!pmd_write(*pmd) &&
-	    gup_page_unshare(flags, page, true)) {
+	    gup_page_unshare(flags, page, true, vma)) {
 		VM_WARN_ON(pmd_write(*pmd));
 		return ERR_PTR(-EMLINK);
 	}
