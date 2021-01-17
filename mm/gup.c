@@ -101,7 +101,8 @@ static bool gup_must_unshare_hugetlbfs_slowpath(struct page *page)
  */
 static __always_inline bool __gup_must_unshare(unsigned int flags,
 					       struct page *page,
-					       bool is_head, bool irq_safe)
+					       bool is_head, bool irq_safe,
+					       struct vm_area_struct *vma)
 {
 	if (flags & (FOLL_WRITE|FOLL_NOUNSHARE))
 		return false;
@@ -109,7 +110,8 @@ static __always_inline bool __gup_must_unshare(unsigned int flags,
 	if (!(flags & (FOLL_GET|FOLL_PIN)))
 		return false;
 	if (!PageAnon(page))
-		return false;
+		return (flags & FOLL_MM_SYNC) &&
+			(irq_safe || !(vma->vm_flags & VM_SHARED));
 	if (PageKsm(page))
 		return gup_must_unshare_ksm(flags);
 	if (PageHuge(page)) {
@@ -138,16 +140,17 @@ static __always_inline bool __gup_must_unshare(unsigned int flags,
 }
 
 /* requires full accuracy */
-bool gup_must_unshare(unsigned int flags, struct page *page, bool is_head)
+bool gup_must_unshare(unsigned int flags, struct page *page, bool is_head,
+		      struct vm_area_struct *vma)
 {
-	return __gup_must_unshare(flags, page, is_head, false);
+	return __gup_must_unshare(flags, page, is_head, false, vma);
 }
 
 /* false positives are allowed, false negatives not allowed */
 bool gup_must_unshare_irqsafe(unsigned int flags, struct page *page,
 			      bool is_head)
 {
-	return __gup_must_unshare(flags, page, is_head, true);
+	return __gup_must_unshare(flags, page, is_head, true, NULL);
 }
 
 static void hpage_pincount_add(struct page *page, int refs)
@@ -675,7 +678,7 @@ retry:
 	 * exclusive.
 	 */
 	if (!pte_write(pte) &&
-	    gup_must_unshare(flags, page, false)) {
+	    gup_must_unshare(flags, page, false, vma)) {
 		page = ERR_PTR(-EMLINK);
 		goto out;
 	}
@@ -763,7 +766,7 @@ static struct page *follow_pmd_mask(struct vm_area_struct *vma,
 	if (pmd_none(pmdval))
 		return no_page_table(vma, flags);
 	if (pmd_huge(pmdval) && is_vm_hugetlb_page(vma)) {
-		page = follow_huge_pmd(mm, address, pmd, flags);
+		page = follow_huge_pmd(vma, address, pmd, flags);
 		if (page)
 			return page;
 		return no_page_table(vma, flags);
