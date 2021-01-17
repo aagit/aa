@@ -2947,7 +2947,7 @@ static inline int vm_fault_to_errno(vm_fault_t vm_fault, int foll_flags)
 }
 
 extern bool gup_must_unshare(unsigned int flags, struct page *page,
-			     bool is_head);
+			     bool is_head, struct vm_area_struct *vma);
 extern bool gup_must_unshare_irqsafe(unsigned int flags, struct page *page,
 				     bool is_head);
 
