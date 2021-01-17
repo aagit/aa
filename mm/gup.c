@@ -62,7 +62,7 @@ static __always_inline bool __gup_must_unshare(unsigned int flags,
 	if (!PageAnon(page))
 		return false;
 	if (PageKsm(page))
-		return false;
+		return !!(flags & FOLL_MM_SYNC);
 	if (is_head) {
 		if (PageTransHuge(page)) {
 			if (!is_fast_only_in_irq(irq_safe))
