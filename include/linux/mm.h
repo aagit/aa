@@ -2923,7 +2923,7 @@ static inline bool __gup_page_unshare(unsigned int flags, struct page *page,
 	if (!PageAnon(page))
 		return false;
 	if (PageKsm(page))
-		return false;
+		return !!(flags & FOLL_LONGTERM);
 	if (PageHuge(page)) /* FIXME */
 		return false;
 	if (is_head) {
