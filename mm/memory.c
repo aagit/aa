@@ -3080,7 +3080,12 @@ static vm_fault_t wp_page_unshare(struct vm_fault *vmf)
 	bool mm_sync = !!(vmf->flags & FAULT_FLAG_UNSHARE_MM_SYNC);
 	vmf->page = vm_normal_page(vmf->vma, vmf->address, vmf->orig_pte);
 	if (!vmf->page) {
-		goto out_unlock;
+		if (!mm_sync || !is_zero_pfn(pte_pfn(vmf->orig_pte)))
+			goto out_unlock;
+		if (vmf->vma->vm_flags & VM_SHARED) {
+			WARN_ON_ONCE(1);
+			goto out_unlock;
+		}
 	} else if (PageKsm(vmf->page)) {
 		if (!mm_sync)
 			goto out_unlock;
@@ -3146,12 +3151,17 @@ static vm_fault_t wp_page_unshare(struct vm_fault *vmf)
 		if (must_unshare)
 			return __wp_page_unshare(vmf);
 		goto out_unlock;
+	} else {
+		if (!mm_sync || vmf->vma->vm_flags & VM_SHARED)
+			goto out_unlock;
 	}
 
 	/*
-	 * Here the page can only be PageKsm.
+	 * Here the page can only be PageKsm a zeropage or a
+	 * MAP_PRIVATE pagecache.
 	 */
-	get_page(vmf->page);
+	if (vmf->page)
+		get_page(vmf->page);
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 	return wp_page_unshare_copy(vmf);
 
