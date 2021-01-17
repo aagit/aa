@@ -458,7 +458,7 @@ retry:
 	 * unshare until the page becomes exclusive.
 	 */
 	if (!pte_write(pte) &&
-	    gup_page_unshare(flags, page, false)) {
+	    gup_page_unshare(flags, page, false, vma)) {
 		page = ERR_PTR(-EMLINK);
 		goto out;
 	}
