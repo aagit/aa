@@ -2913,19 +2913,21 @@ static inline int vm_fault_to_errno(vm_fault_t vm_fault, int foll_flags)
  * FAULT_FLAG_UNSHARE_LT flag.
  */
 static inline bool __gup_page_unshare(unsigned int flags, struct page *page,
-				      bool is_head, bool irq_safe)
+				      bool is_head, bool irq_safe,
+				      struct vm_area_struct *vma)
 {
 	if (flags & FOLL_WRITE)
 		return false;
 	/* mmu notifier doesn't need unshare */
 	if (!(flags & (FOLL_GET|FOLL_PIN)))
 		return false;
-	if (!PageAnon(page))
-		return false;
-	if (PageKsm(page))
-		return !!(flags & FOLL_LONGTERM);
 	if (PageHuge(page)) /* FIXME */
 		return false;
+	if (!PageAnon(page))
+		return (flags & FOLL_LONGTERM) &&
+			(irq_safe || !(vma->vm_flags & VM_SHARED));
+	if (PageKsm(page))
+		return !!(flags & FOLL_LONGTERM);
 	if (is_head) {
 		if (PageTransHuge(page)) {
 			if (!irq_safe || likely(!irq_count()))
@@ -2942,9 +2944,9 @@ static inline bool __gup_page_unshare(unsigned int flags, struct page *page,
 
 /* requires full accuracy */
 static inline bool gup_page_unshare(unsigned int flags, struct page *page,
-				    bool is_head)
+				    bool is_head, struct vm_area_struct *vma)
 {
-	return __gup_page_unshare(flags, page, is_head, false);
+	return __gup_page_unshare(flags, page, is_head, false, vma);
 }
 
 /* false positives are allowed, false negatives not allowed */
@@ -2952,7 +2954,7 @@ static inline bool gup_page_unshare_irqsafe(unsigned int flags,
 					    struct page *page,
 					    bool is_head)
 {
-	return __gup_page_unshare(flags, page, is_head, true);
+	return __gup_page_unshare(flags, page, is_head, true, NULL);
 }
 
 typedef int (*pte_fn_t)(pte_t *pte, unsigned long addr, void *data);
