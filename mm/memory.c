@@ -3235,10 +3235,6 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	 */
 	if (PageAnon(vmf->page)) {
 		int total_map_swapcount;
-		if (PageKsm(vmf->page) && (PageSwapCache(vmf->page) ||
-					   page_count(vmf->page) != 1))
-			goto copy;
-
 		/*
 		 * Optimize away the trylock_page for mapcount > 1.
 		 *
@@ -3271,6 +3267,9 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 		 * is found equal 1.
 		 */
 		if (page_mapcount(vmf->page) > 1)
+			goto copy;
+
+		if (unlikely(PageKsm(vmf->page) && PageSwapCache(vmf->page)))
 			goto copy;
 
 		if (!trylock_page(vmf->page)) {
