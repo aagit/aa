@@ -359,15 +359,42 @@ static inline unsigned long page_mapcount_seq_begin(struct page *page)
 	return seqcount;
 }
 
-static inline bool page_mapcount_seq_retry(struct page *page,
-					   unsigned long seqcount)
+/* return false if it succeeded as page_mapcount_seq_retry_irqsafe */
+static inline bool page_mapcount_seq_begin_irqsafe(struct page *page,
+						   unsigned long *seqcount,
+						   bool irq_safe)
+{
+	unsigned long _seqcount;
+	for (;;) {
+		_seqcount = READ_ONCE(*__page_mapcount_seq(page));
+		if (likely(!(_seqcount & 1)))
+			break;
+		if (irq_safe)
+			return true;
+		cpu_relax();
+	}
+	smp_rmb();
+	*seqcount = _seqcount;
+	return false;
+}
+
+static inline bool page_mapcount_seq_retry_irqsafe(struct page *page,
+						   unsigned long seqcount,
+						   bool irq_safe)
 {
 	smp_rmb();
 	if (unlikely(seqcount != READ_ONCE(*__page_mapcount_seq(page)))) {
-		cpu_relax();
+		if (!irq_safe)
+			cpu_relax();
 		return true;
 	}
 	return false;
+}
+
+static __always_inline bool page_mapcount_seq_retry(struct page *page,
+						    unsigned long seqcount)
+{
+	return page_mapcount_seq_retry_irqsafe(page, seqcount, false);
 }
 
 static inline void page_mapcount_lock(struct page *page)
