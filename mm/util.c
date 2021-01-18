@@ -727,8 +727,13 @@ struct address_space *folio_mapping(struct folio *folio)
 }
 EXPORT_SYMBOL(folio_mapping);
 
-/* Slow path of page_mapcount() for compound pages */
-int __page_mapcount(struct page *page)
+/*
+ * NOTE: __page_mapcount_irqsafe() must never be called directly, not
+ * even from within util.c: it's __always_inline and it won't return a
+ * real mapcount reading if irqsafe is true, it may return INT_MAX
+ * instead.
+ */
+static __always_inline int __page_mapcount_irqsafe(struct page *page, bool irqsafe)
 {
 	unsigned int seqcount;
 	int ret;
@@ -747,18 +752,37 @@ int __page_mapcount(struct page *page)
 
 	head = compound_head(page);
 again:
-	seqcount = page_mapcount_seq_begin(head);
+	if (page_mapcount_seq_begin_irqsafe(head, &seqcount, irqsafe)) {
+		/* simulate a shared page */
+		return INT_MAX;
+	}
 
 	ret = atomic_read(&page->_mapcount) + 1;
 	ret += atomic_read(compound_mapcount_ptr(head)) + 1;
 	if (PageDoubleMap(head))
 		ret--;
 
-	if (page_mapcount_seq_retry(head, seqcount))
+	if (page_mapcount_seq_retry_irqsafe(head, seqcount, irqsafe)) {
+		if (irqsafe) {
+			/* simulate a shared page */
+			return INT_MAX;
+		}
 		goto again;
+	}
 	return ret;
 }
+
+/* Slow path of page_mapcount() for compound pages */
+int __page_mapcount(struct page *page)
+{
+	return __page_mapcount_irqsafe(page, false);
+}
 EXPORT_SYMBOL_GPL(__page_mapcount);
+
+bool __page_anon_shared_irqsafe(struct page *page)
+{
+	return __page_mapcount_irqsafe(page, true) > 1;
+}
 
 /**
  * folio_copy - Copy the contents of one folio to another.
