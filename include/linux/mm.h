@@ -872,6 +872,15 @@ static inline int page_mapcount(struct page *page)
 	return atomic_read(&page->_mapcount) + 1;
 }
 
+extern bool __page_anon_shared_irqsafe(struct page *);
+
+static inline bool page_anon_shared_irqsafe(struct page *page)
+{
+	if (unlikely(PageCompound(page)))
+		return __page_anon_shared_irqsafe(page);
+	return atomic_read(&page->_mapcount) + 1 > 1;
+}
+
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 int total_mapcount(struct page *page);
 int page_trans_huge_mapcount(struct page *page, int *total_mapcount);
