@@ -1275,7 +1275,8 @@ unlock:
  * This is faster because by returning a boolean, instead of the exact
  * value, it is allowed to return false without scanning all subpages.
  */
-static bool page_trans_huge_anon_shared(struct page *page)
+static __always_inline bool __page_trans_huge_anon_shared(struct page *page,
+							  bool irq_safe)
 {
 	int i, mapcount;
 	unsigned int seqcount;
@@ -1283,11 +1284,16 @@ static bool page_trans_huge_anon_shared(struct page *page)
 	VM_BUG_ON_PAGE(!PageTransHuge(page), page);
 
 again:
-	seqcount = page_mapcount_seq_begin(page);
+	if (page_mapcount_seq_begin_irqsafe(page, &seqcount, irq_safe))
+		return true;
 	mapcount = compound_mapcount(page);
 	if (mapcount > 1) {
-		if (page_mapcount_seq_retry(page, seqcount))
+		if (page_mapcount_seq_retry_irqsafe(page, seqcount,
+						    irq_safe)) {
+			if (irq_safe)
+				return true;
 			goto again;
+		}
 		return true;
 	}
 	if (PageDoubleMap(page))
@@ -1295,15 +1301,32 @@ again:
 	for (i = 0; i < thp_nr_pages(page); i++) {
 		int _mapcount = atomic_read(&page[i]._mapcount) + 1;
 		if (_mapcount + mapcount > 1) {
-			if (page_mapcount_seq_retry(page, seqcount))
+			if (page_mapcount_seq_retry_irqsafe(page, seqcount,
+							    irq_safe)) {
+				if (irq_safe)
+					return true;
 				goto again;
+			}
 			return true;
 		}
 	}
-	if (page_mapcount_seq_retry(page, seqcount))
+	if (page_mapcount_seq_retry_irqsafe(page, seqcount, irq_safe)) {
+		if (irq_safe)
+			return true;
 		goto again;
+	}
 
 	return false;
+}
+
+bool page_trans_huge_anon_shared(struct page *page)
+{
+	return __page_trans_huge_anon_shared(page, false);
+}
+
+bool page_trans_huge_anon_shared_irqsafe(struct page *page)
+{
+	return __page_trans_huge_anon_shared(page, true);
 }
 
 vm_fault_t do_huge_pmd_wp_page(struct vm_fault *vmf, pmd_t orig_pmd)
