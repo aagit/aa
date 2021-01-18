@@ -713,8 +713,13 @@ struct address_space *page_mapping_file(struct page *page)
 	return page_mapping(page);
 }
 
-/* Slow path of page_mapcount() for compound pages */
-int __page_mapcount(struct page *page)
+/*
+ * NOTE: __page_mapcount_irqsafe() must never be called directly, not
+ * even from within util.c: it's __always_inline and it won't return a
+ * real mapcount reading if irqsafe is true, it may return INT_MAX
+ * instead.
+ */
+static __always_inline int __page_mapcount_irqsafe(struct page *page, bool irqsafe)
 {
 	unsigned int seqcount;
 	int ret;
@@ -727,18 +732,37 @@ int __page_mapcount(struct page *page)
 		return atomic_read(&page->_mapcount) + 1;
 	page = compound_head(page);
 again:
-	seqcount = page_mapcount_seq_begin(page);
+	if (page_mapcount_seq_begin_irqsafe(page, &seqcount, irqsafe)) {
+		/* simulate a shared page */
+		return INT_MAX;
+	}
 
 	ret = atomic_read(&page->_mapcount) + 1;
 	ret += atomic_read(compound_mapcount_ptr(page)) + 1;
 	if (PageDoubleMap(page))
 		ret--;
 
-	if (page_mapcount_seq_retry(page, seqcount))
+	if (page_mapcount_seq_retry_irqsafe(page, seqcount, irqsafe)) {
+		if (irqsafe) {
+			/* simulate a shared page */
+			return INT_MAX;
+		}
 		goto again;
+	}
 	return ret;
 }
+
+/* Slow path of page_mapcount() for compound pages */
+int __page_mapcount(struct page *page)
+{
+	return __page_mapcount_irqsafe(page, false);
+}
 EXPORT_SYMBOL_GPL(__page_mapcount);
+
+bool __page_anon_shared_irqsafe(struct page *page)
+{
+	return __page_mapcount_irqsafe(page, true) > 1;
+}
 
 int sysctl_overcommit_memory __read_mostly = OVERCOMMIT_GUESS;
 int sysctl_overcommit_ratio __read_mostly = 50;
