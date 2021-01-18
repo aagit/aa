@@ -757,6 +757,27 @@ again:
 }
 EXPORT_SYMBOL_GPL(__page_mapcount);
 
+bool __page_anon_shared_irqsafe(struct page *page)
+{
+	unsigned int seqcount;
+	int ret;
+
+	if (!PageAnon(page) && !PageHuge(page))
+		return atomic_read(&page->_mapcount) > 0;
+	page = compound_head(page);
+	if (page_mapcount_seq_begin_irqsafe(page, &seqcount, true))
+		return true;
+
+	ret = atomic_read(&page->_mapcount);
+	ret += atomic_read(compound_mapcount_ptr(page)) + 1;
+	if (PageDoubleMap(page))
+		ret--;
+
+	if (page_mapcount_seq_retry_irqsafe(page, seqcount, true))
+		return true;
+	return ret > 0;
+}
+
 void copy_huge_page(struct page *dst, struct page *src)
 {
 	unsigned i, nr = compound_nr(src);
