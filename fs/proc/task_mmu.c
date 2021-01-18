@@ -1215,26 +1215,41 @@ static ssize_t clear_refs_write(struct file *file, const char __user *buf,
 			.type = type,
 		};
 
-		if (mmap_write_lock_killable(mm)) {
-			count = -EINTR;
-			goto out_mm;
-		}
 		if (type == CLEAR_REFS_MM_HIWATER_RSS) {
+			if (mmap_write_lock_killable(mm)) {
+				count = -EINTR;
+				goto out_mm;
+			}
+
 			/*
 			 * Writing 5 to /proc/pid/clear_refs resets the peak
 			 * resident set size to this mm's current rss value.
 			 */
 			reset_mm_hiwater_rss(mm);
-			goto out_unlock;
+			mmap_write_unlock(mm);
+			goto out_mm;
 		}
 
+		if (mmap_read_lock_killable(mm)) {
+			count = -EINTR;
+			goto out_mm;
+		}
 		tlb_gather_mmu(&tlb, mm, 0, -1);
 		if (type == CLEAR_REFS_SOFT_DIRTY) {
 			for (vma = mm->mmap; vma; vma = vma->vm_next) {
 				if (!(vma->vm_flags & VM_SOFTDIRTY))
 					continue;
-				vma->vm_flags &= ~VM_SOFTDIRTY;
-				vma_set_page_prot(vma);
+				mmap_read_unlock(mm);
+				if (mmap_write_lock_killable(mm)) {
+					count = -EINTR;
+					goto out_mm;
+				}
+				for (vma = mm->mmap; vma; vma = vma->vm_next) {
+					vma->vm_flags &= ~VM_SOFTDIRTY;
+					vma_set_page_prot(vma);
+				}
+				mmap_write_downgrade(mm);
+				break;
 			}
 
 			mmu_notifier_range_init(&range, MMU_NOTIFY_SOFT_DIRTY,
@@ -1246,8 +1261,7 @@ static ssize_t clear_refs_write(struct file *file, const char __user *buf,
 		if (type == CLEAR_REFS_SOFT_DIRTY)
 			mmu_notifier_invalidate_range_end(&range);
 		tlb_finish_mmu(&tlb, 0, -1);
-out_unlock:
-		mmap_write_unlock(mm);
+		mmap_read_unlock(mm);
 out_mm:
 		mmput(mm);
 	}
