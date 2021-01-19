@@ -457,7 +457,8 @@ retry:
 	 * This needs to set FOLL_UNSHARE and keep retrying the
 	 * unshare until the page becomes exclusive.
 	 */
-	if (gup_page_unshare(flags, page, false)) {
+	if (!pte_write(pte) &&
+	    gup_page_unshare(flags, page, false)) {
 		VM_WARN_ON(pte_write(pte));
 		page = ERR_PTR(-EMLINK);
 		goto out;
@@ -2063,7 +2064,8 @@ static int gup_pte_range(pmd_t pmd, unsigned long addr, unsigned long end,
 			goto pte_unmap;
 		}
 
-		if (gup_page_unshare_irqsafe(flags, page, false)) {
+		if (!pte_write(pte) &&
+		    gup_page_unshare_irqsafe(flags, page, false)) {
 			put_compound_head(head, 1, flags);
 			goto pte_unmap;
 		}
@@ -2312,7 +2314,8 @@ static int gup_huge_pmd(pmd_t orig, pmd_t *pmdp, unsigned long addr,
 		return 0;
 	}
 
-	if (gup_page_unshare_irqsafe(flags, head, true)) {
+	if (!pmd_write(orig) &&
+	    gup_page_unshare_irqsafe(flags, head, true)) {
 		put_compound_head(head, refs, flags);
 		return 0;
 	}
