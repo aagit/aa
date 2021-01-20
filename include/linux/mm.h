@@ -427,6 +427,7 @@ extern pgprot_t protection_map[16];
  * @FAULT_FLAG_INSTRUCTION: The fault was during an instruction fetch.
  * @FAULT_FLAG_INTERRUPTIBLE: The fault can be interrupted by non-fatal signals.
  * @FAULT_FLAG_UNSHARE: GUP invoked a COR fault to unshare the wrprotected page.
+ * @FAULT_FLAG_UNSHARE_MM_SYNC: GUP invoked COR to deliver LONGTERM coherency.
  *
  * About @FAULT_FLAG_ALLOW_RETRY and @FAULT_FLAG_TRIED: we can specify
  * whether we would allow page faults to retry by specifying these two
@@ -458,6 +459,7 @@ extern pgprot_t protection_map[16];
 #define FAULT_FLAG_INSTRUCTION  		0x100
 #define FAULT_FLAG_INTERRUPTIBLE		0x200
 #define FAULT_FLAG_UNSHARE			0x400
+#define FAULT_FLAG_UNSHARE_MM_SYNC		0x800
 
 /*
  * The default fault flags that should be used by most of the
@@ -2821,6 +2823,7 @@ struct page *follow_page(struct vm_area_struct *vma, unsigned long address,
 #define FOLL_PIN	0x40000	/* pages must be released via unpin_user_page */
 #define FOLL_FAST_ONLY	0x80000	/* gup_fast: prevent fall-back to slow gup */
 #define FOLL_NOUNSHARE	0x100000 /* gup: don't trigger a COR fault */
+#define FOLL_MM_SYNC	0x200000/* gup: long term mm coherency to page pins */
 
 /*
  * FOLL_PIN and FOLL_LONGTERM may be used in various combinations with each
