@@ -45,10 +45,42 @@ static __always_inline bool is_fast_only_in_irq(bool irq_safe)
  * unshare with copy-on-read (COR) for the GUP pin to remain coherent
  * with the MM?
  *
- * This only provides full coherency to short term pins: FOLL_LONGTERM
- * still needs to specify FOLL_WRITE|FOLL_FORCE in the caller and in
- * turn it still risks inefficiency and to lose coherency with the MM
- * in various cases.
+ * This function provides full MM coherency to short term
+ * pins. FOLL_LONGTERM must be instead combined with FOLL_MM_SYNC to
+ * achieve full MM coherency by the specs.
+ *
+ * When FOLL_MM_SYNC is specified PageKsm, MAP_PRIVATE pagecache and
+ * the zeropage are always unshared with COR before taking the pin.
+ *
+ * Short term pins don't generally require FOLL_MM_SYNC and they can
+ * remain zerocopy in the aforementioned three cases. It's not a bug
+ * to specify FOLL_MM_SYNC for short term pins, but it is slower
+ * because it would trigger unnecessary COR faults.
+ *
+ * The reason short term pins don't lose coherency even if they don't
+ * unshare those three kind of readonly page types, is that they will
+ * refresh the physaddr from the the pgtable before each DMA (or even
+ * if they issue many DMA from the same GUP they are ok that the
+ * snapshot of the data payload is taken at GUP time and that the
+ * coherency with the CPU may be temorarily lost until the next GUP
+ * invocation). So the MM coherency won't break for them even if a COW
+ * happens after the short term pin has been taken by GUP.
+ *
+ * The COR fault will then disambiguate a long term pin requested with
+ * FOLL_MM_SYNC from a short term pin using the
+ * FAULT_FLAG_UNSHARE_MM_SYNC flag.
+ *
+ * The below table assumes !FOLL_WRITE (readonly GUP pins) and answers
+ * when FOLL_UNSHARE is activated during GUP to generate exclusive
+ * anonymous memory mapped readonly through the COR fault.
+ *
+ * page/mapping type	 | short term   | FOLL_MM_SYNC
+ * ------------------------------------------------------
+ * PageAnon && !PageKsm  | mapcount > 1 | mapcount > 1
+ * PageAnon && PageKsm   | never	| always
+ * zeropage		 | never	| always
+ * MAP_PRIVATE !PageAnon | never	| always
+ * MAP_SHARED  !PageAnon | never	| never
  */
 static __always_inline bool __gup_must_unshare(unsigned int flags,
 					       struct page *page,
