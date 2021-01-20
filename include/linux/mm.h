@@ -479,6 +479,7 @@ enum fault_flag {
 	FAULT_FLAG_INSTRUCTION =	1 << 8,
 	FAULT_FLAG_INTERRUPTIBLE =	1 << 9,
 	FAULT_FLAG_UNSHARE =		1 << 10,
+	FAULT_FLAG_UNSHARE_MM_SYNC =	1 << 11,
 };
 
 /*
@@ -2876,6 +2877,7 @@ struct page *follow_page(struct vm_area_struct *vma, unsigned long address,
 #define FOLL_PIN	0x40000	/* pages must be released via unpin_user_page */
 #define FOLL_FAST_ONLY	0x80000	/* gup_fast: prevent fall-back to slow gup */
 #define FOLL_UNSHARE	0x100000/* gup: unshare anon page with mapcount > 1 */
+#define FOLL_MM_SYNC	0x200000/* gup: long term mm coherency to page pins */
 
 /*
  * FOLL_PIN and FOLL_LONGTERM may be used in various combinations with each
