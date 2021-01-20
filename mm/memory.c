@@ -3073,6 +3073,12 @@ static vm_fault_t __wp_page_unshare(struct vm_fault *vmf)
  * notifier isn't supported by the holder of the page pin. If the MMU
  * notifier was backing the page pin, the page pin would have been
  * released before the page could have been unmapped.
+ *
+ * FOLL_LONGTERM pins (unlike short term pins) to remain MM coherent
+ * need to unshare PageKsm, MAP_PRIVATE pagecache and zeropages, which
+ * is enabled by FOLL_MM_SYNC. Short term pins don't need to unshare
+ * those readonly page types because short term pins will refresh the
+ * physaddr from the pgtable.
  */
 static vm_fault_t wp_page_unshare(struct vm_fault *vmf)
 	__releases(vmf->ptl)
