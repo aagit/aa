@@ -864,6 +864,8 @@ static int faultin_page(struct vm_area_struct *vma,
 	}
 	if (*flags & FOLL_UNSHARE) {
 		fault_flags |= FAULT_FLAG_UNSHARE;
+		if (unlikely(*flags & FOLL_LONGTERM))
+			fault_flags |= FAULT_FLAG_UNSHARE_LT;
 		/* FAULT_FLAG_WRITE and FAULT_FLAG_UNSHARE are incompatible */
 		VM_WARN_ON(fault_flags & FAULT_FLAG_WRITE);
 	}
