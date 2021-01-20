@@ -465,6 +465,7 @@ extern pgprot_t protection_map[16];
 #define FAULT_FLAG_INSTRUCTION  		0x100
 #define FAULT_FLAG_INTERRUPTIBLE		0x200
 #define FAULT_FLAG_UNSHARE			0x400
+#define FAULT_FLAG_UNSHARE_LT			0x800
 
 /*
  * The default fault flags that should be used by most of the
@@ -2886,10 +2887,30 @@ static inline int vm_fault_to_errno(vm_fault_t vm_fault, int foll_flags)
  * unshare with copy-on-read (COR) for the GUP pin to remain coherent
  * with the MM?
  *
- * This only provides full coherency to short term pins: FOLL_LONGTERM
- * still needs to specify FOLL_WRITE|FOLL_FORCE in the caller and in
- * turn it still risks inefficiency and to lose coherency with the MM
- * in various cases.
+ * This function provides the correct answer for both short term pins
+ * and to FOLL_LONGTERM.
+ *
+ * PageKsm, MAP_PRIVATE pagecache and the zeropage need to be unshared
+ * with COR before taking long term pins with FOLL_LONGTERM in order
+ * to delivery full MM coherency to LONGTERM pins.
+ *
+ * Short term pins can still remain zerocopy in the aforementioned
+ * three cases. This difference in behavior between short term and
+ * long term pins is a strict optimization to keep the short term pin
+ * fast and to avoid unnecessary copies.
+ *
+ * The reason short term pins don't lose coherency even if they don't
+ * unshare those three kind of readonly page types, is that they will
+ * refresh the physaddr from the the pgtable before each DMA (or even
+ * if they issue many DMA from the same GUP they are ok that the
+ * snapshot of the data payload is taken at GUP time and that the
+ * coherency with the CPU is temorarily lost until the next GUP
+ * invocation). So the MM coherency won't break for them even if a COW
+ * happens after the short term pin has been taken by GUP.
+ *
+ * The COR fault will then disambiguate a long term pin requested with
+ * FOLL_LONGTERM|FOLL_SHARED from a short term FOLL_SHARED using the
+ * FAULT_FLAG_UNSHARE_LT flag.
  */
 static inline bool __gup_page_unshare(unsigned int flags, struct page *page,
 				      bool is_head, bool irq_safe)
