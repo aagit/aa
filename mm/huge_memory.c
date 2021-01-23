@@ -2203,8 +2203,10 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 	 * lock_page_memcg() is taken before page_mapcount_lock() in
 	 * page_remove_anon_compound_rmap().
 	 */
-	lock_page_memcg(page);
-	page_mapcount_lock(page);
+	if (!pmd_migration) {
+		lock_page_memcg(page);
+		page_mapcount_lock(page);
+	}
 
 	for (i = 0, addr = haddr; i < HPAGE_PMD_NR; i++, addr += PAGE_SIZE) {
 		pte_t entry, *pte;
@@ -2263,14 +2265,16 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 		}
 	}
 
-	/*
-	 * Here a smp_wmb() is needed to make the pte writes visible
-	 * before the pmd write and it is provided implicitly by the
-	 * page_mapcount_unlock().
-	 */
-	page_mapcount_unlock(page);
-	unlock_page_memcg(page);
-
+	if (!pmd_migration) {
+		/*
+		 * Here a smp_wmb() is needed to make the pte writes visible
+		 * before the pmd write and it is provided implicitly by the
+		 * page_mapcount_unlock().
+		 */
+		page_mapcount_unlock(page);
+		unlock_page_memcg(page);
+	} else
+		smp_wmb(); /* make pte visible before pmd */
 	pmd_populate(mm, pmd, pgtable);
 
 	if (freeze) {
