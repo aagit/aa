@@ -864,11 +864,16 @@ static bool page_anon_shared_irqsafe(struct page *page)
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 int total_mapcount(struct page *page);
+bool total_mapcount_is_zero(struct page *page);
 int page_trans_huge_mapcount(struct page *page, int *total_mapcount);
 #else
 static inline int total_mapcount(struct page *page)
 {
 	return page_mapcount(page);
+}
+static inline bool total_mapcount_is_zero(struct page *page)
+{
+	return !total_mapcount(page);
 }
 static inline int page_trans_huge_mapcount(struct page *page,
 					   int *total_mapcount)
