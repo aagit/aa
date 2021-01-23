@@ -1744,9 +1744,13 @@ static bool invalid_migration_vma(struct vm_area_struct *vma, void *arg)
 	return vma_is_temporary_stack(vma);
 }
 
+/*
+ * FIXME: rmap_walk_control.done() needs to return boolean so this
+ * extra call can be optimized away.
+ */
 static int page_mapcount_is_zero(struct page *page)
 {
-	return !total_mapcount(page);
+	return total_mapcount_is_zero(page);
 }
 
 /**
