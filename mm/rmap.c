@@ -1740,7 +1740,7 @@ static bool invalid_migration_vma(struct vm_area_struct *vma, void *arg)
 
 static int page_mapcount_is_zero(struct page *page)
 {
-	return !total_mapcount(page);
+	return !page_mapped(page);
 }
 
 /**
