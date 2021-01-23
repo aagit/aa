@@ -2107,6 +2107,7 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 	bool young, write, soft_dirty, pmd_migration = false, uffd_wp = false;
 	unsigned long addr;
 	int i;
+	bool dec_page_state;
 
 	VM_BUG_ON(haddr & ~HPAGE_PMD_MASK);
 	VM_BUG_ON_VMA(vma->vm_start > haddr, vma);
@@ -2199,14 +2200,8 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 	pgtable = pgtable_trans_huge_withdraw(mm, pmd);
 	pmd_populate(mm, &_pmd, pgtable);
 
-	/*
-	 * lock_page_memcg() is taken before page_mapcount_lock() in
-	 * page_remove_anon_compound_rmap().
-	 */
-	if (!pmd_migration) {
-		lock_page_memcg(page);
+	if (!pmd_migration)
 		page_mapcount_lock(page);
-	}
 
 	for (i = 0, addr = haddr; i < HPAGE_PMD_NR; i++, addr += PAGE_SIZE) {
 		pte_t entry, *pte;
@@ -2243,6 +2238,7 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 		pte_unmap(pte);
 	}
 
+	dec_page_state = false;
 	if (!pmd_migration) {
 		/*
 		 * Set PG_double_map before dropping compound_mapcount to avoid
@@ -2256,7 +2252,7 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 
 		if (atomic_add_negative(-1, compound_mapcount_ptr(page))) {
 			/* Last compound_mapcount is gone. */
-			__dec_lruvec_page_state(page, NR_ANON_THPS);
+			dec_page_state = true;
 			if (TestClearPageDoubleMap(page)) {
 				/* No need in mapcount reference anymore */
 				for (i = 0; i < HPAGE_PMD_NR; i++)
@@ -2272,9 +2268,13 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 		 * page_mapcount_unlock().
 		 */
 		page_mapcount_unlock(page);
-		unlock_page_memcg(page);
 	} else
 		smp_wmb(); /* make pte visible before pmd */
+	if (dec_page_state) {
+		lock_page_memcg(page);
+		__dec_lruvec_page_state(page, NR_ANON_THPS);
+		unlock_page_memcg(page);
+	}
 	pmd_populate(mm, pmd, pgtable);
 
 	if (freeze) {
