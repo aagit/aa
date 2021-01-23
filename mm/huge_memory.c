@@ -2630,6 +2630,49 @@ again:
 	return ret;
 }
 
+/* functionally equivalent to !total_mapcount() but faster */
+bool total_mapcount_is_zero(struct page *page)
+{
+	int i, nr;
+	unsigned long seqcount;
+
+	VM_BUG_ON_PAGE(PageTail(page), page);
+
+	if (likely(!PageCompound(page)))
+		return atomic_read(&page->_mapcount) < 0;
+
+	if (PageHuge(page))
+		return head_compound_mapcount(page) <= 0;
+
+	nr = compound_nr(page);
+again:
+	seqcount = page_mapcount_seq_begin(page);
+	if (head_compound_mapcount(page) > 0) {
+		if (page_mapcount_seq_retry(page, seqcount))
+			goto again;
+		return false;
+	}
+	/*
+	 * Same as in page_mapped(), no need to check
+	 * PageDoubleMap.
+	 *
+	 * PageAnon if PageDoubleMap is set will decrease the tail
+	 * page mapcount when the compound_mapcount goes negative, and
+	 * the check above enforces it's not negative yet.
+	 *
+	 * !PageAnon represent the compound_mapcount in the tail
+	 * mapcount too and there's no special DoubleMap offset.
+	 */
+	for (i = 0; i < nr; i++) {
+		if (atomic_read(&page[i]._mapcount) >= 0) {
+			if (page_mapcount_seq_retry(page, seqcount))
+				goto again;
+			return false;
+		}
+	}
+	return true;
+}
+
 /*
  * This calculates accurately how many mappings a transparent hugepage
  * has (unlike page_mapcount() which isn't fully accurate). This full
