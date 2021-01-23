@@ -2554,13 +2554,13 @@ int total_mapcount(struct page *page)
 		return atomic_read(&page->_mapcount) + 1;
 
 	if (PageHuge(page))
-		return compound_mapcount(page);
+		return head_compound_mapcount(page);
 
 	nr = compound_nr(page);
 
 again:
 	seqcount = page_mapcount_seq_begin(page);
-	compound = ret = compound_mapcount(page);
+	compound = ret = head_compound_mapcount(page);
 	for (i = 0; i < nr; i++)
 		ret += atomic_read(&page[i]._mapcount) + 1;
 	double_map = PageDoubleMap(page);
