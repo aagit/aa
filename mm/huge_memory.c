@@ -2672,6 +2672,7 @@ again:
 	}
 	return true;
 }
+EXPORT_SYMBOL(total_mapcount_is_zero);
 
 /*
  * This calculates accurately how many mappings a transparent hugepage
