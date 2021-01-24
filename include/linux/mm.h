@@ -1591,7 +1591,14 @@ static inline pgoff_t page_index(struct page *page)
 	return page->index;
 }
 
-bool page_mapped(struct page *page);
+/*
+ * Return true if this page is mapped into pagetables.
+ * For compound page it returns true if any subpage of compound page is mapped.
+ */
+static inline bool page_mapped(struct page *page)
+{
+	return !total_mapcount_is_zero(compound_head(page));
+}
 struct address_space *page_mapping(struct page *page);
 struct address_space *page_mapping_file(struct page *page);
 
