@@ -2998,12 +2998,14 @@ struct page *follow_page(struct vm_area_struct *vma, unsigned long address,
 #define FOLL_REMOTE	0x2000	/* we are working on non-current tsk/mm */
 #define FOLL_COW	0x4000	/* internal GUP flag */
 #define FOLL_ANON	0x8000	/* don't do file mappings */
-#define FOLL_LONGTERM	0x10000	/* mapping lifetime is indefinite: see below */
+#define __FOLL_LONGTERM	0x10000	/* mapping lifetime is indefinite: see below */
 #define FOLL_SPLIT_PMD	0x20000	/* split huge pmd before returning */
 #define FOLL_PIN	0x40000	/* pages must be released via unpin_user_page */
 #define FOLL_FAST_ONLY	0x80000	/* gup_fast: prevent fall-back to slow gup */
 #define FOLL_UNSHARE	0x100000/* gup: unshare anon page with mapcount > 1 */
 #define FOLL_MM_SYNC	0x200000/* gup: long term mm coherency to page pins */
+
+#define FOLL_LONGTERM (FOLL_MM_SYNC|__FOLL_LONGTERM)
 
 /*
  * FOLL_PIN and FOLL_LONGTERM may be used in various combinations with each
