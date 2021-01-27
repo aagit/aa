@@ -1970,9 +1970,9 @@ clear:
 	 * it now, lest undo on failure cancel our earlier guarantee.
 	 */
 	if (sgp != SGP_WRITE && !PageUptodate(page)) {
-		int i;
+		unsigned int i, nr = compound_nr(page);
 
-		for (i = 0; i < compound_nr(page); i++) {
+		for (i = 0; i < nr; i++) {
 			clear_highpage(page + i);
 			flush_dcache_page(page + i);
 		}

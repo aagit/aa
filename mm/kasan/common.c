@@ -285,9 +285,9 @@ struct kasan_free_meta *get_free_info(struct kmem_cache *cache,
 
 void kasan_poison_slab(struct page *page)
 {
-	unsigned long i;
+	unsigned int i, nr = compound_nr(page);
 
-	for (i = 0; i < compound_nr(page); i++)
+	for (i = 0; i < nr; i++)
 		page_kasan_tag_reset(page + i);
 	kasan_poison_shadow(page_address(page), page_size(page),
 			KASAN_KMALLOC_REDZONE);
