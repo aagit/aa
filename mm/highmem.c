@@ -364,7 +364,7 @@ EXPORT_SYMBOL(kunmap_high);
 void zero_user_segments(struct page *page, unsigned start1, unsigned end1,
 		unsigned start2, unsigned end2)
 {
-	unsigned int i;
+	unsigned int i, nr = compound_nr(page);
 
 	BUG_ON(end1 > page_size(page) || end2 > page_size(page));
 
@@ -373,7 +373,7 @@ void zero_user_segments(struct page *page, unsigned start1, unsigned end1,
 	if (start2 >= end2)
 		start2 = end2 = 0;
 
-	for (i = 0; i < compound_nr(page); i++) {
+	for (i = 0; i < nr; i++) {
 		void *kaddr = NULL;
 
 		if (start1 >= PAGE_SIZE) {
