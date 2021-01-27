@@ -2545,9 +2545,10 @@ static void __split_huge_page(struct page *page, struct list_head *list,
 
 int total_mapcount(struct page *page)
 {
-	int i, compound, nr, ret;
+	int compound, ret;
 	unsigned int seqcount;
 	bool double_map;
+	unsigned int i, nr;
 
 	VM_BUG_ON_PAGE(PageTail(page), page);
 

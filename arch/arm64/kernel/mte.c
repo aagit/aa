@@ -62,7 +62,7 @@ static void mte_sync_page_tags(struct page *page, pte_t old_pte,
 void mte_sync_tags(pte_t old_pte, pte_t pte)
 {
 	struct page *page = pte_page(pte);
-	long i, nr_pages = compound_nr(page);
+	unsigned int i, nr_pages = compound_nr(page);
 	bool check_swap = nr_pages == 1;
 	bool pte_is_tagged = pte_tagged(pte);
 
