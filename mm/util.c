@@ -650,7 +650,7 @@ void *page_rmapping(struct page *page)
  */
 bool page_mapped(struct page *page)
 {
-	int i;
+	unsigned int i, nr;
 
 	if (likely(!PageCompound(page)))
 		return atomic_read(&page->_mapcount) >= 0;
@@ -659,7 +659,8 @@ bool page_mapped(struct page *page)
 		return true;
 	if (PageHuge(page))
 		return false;
-	for (i = 0; i < compound_nr(page); i++) {
+	nr = compound_nr(page);
+	for (i = 0; i < nr; i++) {
 		if (atomic_read(&page[i]._mapcount) >= 0)
 			return true;
 	}
