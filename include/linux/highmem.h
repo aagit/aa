@@ -203,7 +203,7 @@ static inline void zero_user_segments(struct page *page,
 		unsigned start2, unsigned end2)
 {
 	void *kaddr = kmap_atomic(page);
-	unsigned int i;
+	unsigned int i, nr;
 
 	BUG_ON(end1 > page_size(page) || end2 > page_size(page));
 
@@ -214,7 +214,8 @@ static inline void zero_user_segments(struct page *page,
 		memset(kaddr + start2, 0, end2 - start2);
 
 	kunmap_atomic(kaddr);
-	for (i = 0; i < compound_nr(page); i++)
+	nr = compound_nr(page);
+	for (i = 0; i < nr; i++)
 		flush_dcache_page(page + i);
 }
 #endif /* !HIGHMEM || !TRANSPARENT_HUGEPAGE */
