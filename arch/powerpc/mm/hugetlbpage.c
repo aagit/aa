@@ -685,10 +685,11 @@ void flush_dcache_icache_hugepage(struct page *page)
 {
 	int i;
 	void *start;
+	unsigned int nr = compound_nr(page);
 
 	BUG_ON(!PageCompound(page));
 
-	for (i = 0; i < compound_nr(page); i++) {
+	for (i = 0; i < nr; i++) {
 		if (!PageHighMem(page)) {
 			__flush_dcache_icache(page_address(page+i));
 		} else {
