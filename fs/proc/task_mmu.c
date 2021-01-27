@@ -433,7 +433,7 @@ static void smaps_account(struct mem_size_stats *mss, struct page *page,
 		bool compound, bool young, bool dirty, bool locked,
 		bool migration)
 {
-	int i, nr = compound ? compound_nr(page) : 1;
+	unsigned int i, nr = compound ? compound_nr(page) : 1;
 	unsigned long size = nr * PAGE_SIZE;
 
 	/*
