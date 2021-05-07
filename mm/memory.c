@@ -818,7 +818,7 @@ copy_present_page(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 	 * the page count. That might give false positives for
 	 * for pinning, but it will work correctly.
 	 */
-	if (likely(!atomic_read(&src_mm->has_pinned)))
+	if (likely(!test_bit(MMF_HAS_PINNED, &src_mm->flags)))
 		return 1;
 	if (likely(!page_maybe_dma_pinned(page)))
 		return 1;
