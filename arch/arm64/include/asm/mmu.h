@@ -103,5 +103,7 @@ extern bool kaslr_requires_kpti(void);
 #define INIT_MM_CONTEXT(name)	\
 	.pgd = init_pg_dir,
 
+#define ARCH_WANT_NOT_FALSE_SHARED_MM_LOCKS 1
+
 #endif	/* !__ASSEMBLY__ */
 #endif
