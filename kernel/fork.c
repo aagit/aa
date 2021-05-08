@@ -2907,6 +2907,7 @@ static void sighand_ctor(void *data)
 void __init proc_caches_init(void)
 {
 	unsigned int mm_size;
+	struct mm_struct *mm_check = NULL;
 
 	sighand_cachep = kmem_cache_create("sighand_cache",
 			sizeof(struct sighand_struct), 0,
@@ -2932,6 +2933,12 @@ void __init proc_caches_init(void)
 	 */
 	mm_size = sizeof(struct mm_struct) + cpumask_size();
 
+	/*
+	 * enforce that mmap_lock and page_table_lock are located on
+	 * two different cachelines.
+	 */
+	BUILD_BUG_ON((long) &mm_check->page_table_lock -
+		     (long) &mm_check->mmap_lock < L1_CACHE_BYTES);
 	mm_cachep = kmem_cache_create_usercopy("mm_struct",
 			mm_size, ARCH_MIN_MMSTRUCT_ALIGN,
 			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT,
