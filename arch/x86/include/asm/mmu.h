@@ -61,4 +61,6 @@ typedef struct {
 void leave_mm(int cpu);
 #define leave_mm leave_mm
 
+#define ARCH_WANT_NOT_FALSE_SHARED_MM_LOCKS 1
+
 #endif /* _ASM_X86_MMU_H */
