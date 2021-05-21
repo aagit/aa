@@ -586,6 +586,13 @@ static __always_inline bool PageAnon(struct page *page)
 	return folio_test_anon(page_folio(page));
 }
 
+static __always_inline int PageAnonNoKsm(struct page *page)
+{
+	page = compound_head(page);
+	return ((unsigned long)page->mapping & PAGE_MAPPING_FLAGS) ==
+		PAGE_MAPPING_ANON;
+}
+
 static __always_inline int __PageMovable(struct page *page)
 {
 	return ((unsigned long)page->mapping & PAGE_MAPPING_FLAGS) ==
@@ -742,6 +749,16 @@ static inline int PageTransHuge(struct page *page)
 {
 	VM_BUG_ON_PAGE(PageTail(page), page);
 	return PageHead(page);
+}
+
+static __always_inline int PageTransHugeAnon(struct page *page)
+{
+	VM_WARN_ON(!PageTransHuge(page));
+	/* KSM pages cannot be trans huge */
+	VM_WARN_ON(((unsigned long)page->mapping & PAGE_MAPPING_FLAGS) ==
+		   PAGE_MAPPING_KSM);
+	return ((unsigned long)page->mapping & PAGE_MAPPING_FLAGS) ==
+		PAGE_MAPPING_ANON;
 }
 
 static inline bool folio_test_transhuge(struct folio *folio)
