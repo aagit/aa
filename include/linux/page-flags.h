@@ -659,6 +659,16 @@ static inline int PageTransHuge(struct page *page)
 	return PageHead(page);
 }
 
+static __always_inline int PageTransHugeAnon(struct page *page)
+{
+	VM_WARN_ON(!PageTransHuge(page));
+	/* KSM pages cannot be trans huge */
+	VM_WARN_ON(((unsigned long)page->mapping & PAGE_MAPPING_FLAGS) ==
+		   PAGE_MAPPING_KSM);
+	return ((unsigned long)page->mapping & PAGE_MAPPING_FLAGS) ==
+		PAGE_MAPPING_ANON;
+}
+
 /*
  * PageTransCompound returns true for both transparent huge pages
  * and hugetlbfs pages, so it should only be called when it's known
