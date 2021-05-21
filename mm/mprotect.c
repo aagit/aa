@@ -35,6 +35,21 @@
 
 #include "internal.h"
 
+/* this checks if we're allowed to set the pgtable of a COW mapping writable */
+static inline bool is_cow_writable(unsigned long vm_flags,
+				   pte_t pte, bool prot_numa)
+{
+	struct page *page;
+	if (prot_numa)
+		return false;
+	if (!is_cow_mapping(vm_flags) || !(vm_flags & VM_WRITE))
+		return false;
+	if (pte_uffd_wp(pte))
+		return false;
+	page = pte_page(pte);
+	return PageAnonNoKsm(page) && page_mapcount(page) == 1;
+}
+
 static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 		unsigned long addr, unsigned long end, pgprot_t newprot,
 		unsigned long cp_flags)
@@ -132,7 +147,10 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 			}
 
 			/* Avoid taking write faults for known dirty pages */
-			if (dirty_accountable && pte_dirty(ptent) &&
+			if ((dirty_accountable ||
+			     is_cow_writable(vma->vm_flags, ptent,
+					     prot_numa)) &&
+					pte_dirty(ptent) &&
 					(pte_soft_dirty(ptent) ||
 					 !(vma->vm_flags & VM_SOFTDIRTY))) {
 				ptent = pte_mkwrite(ptent);
