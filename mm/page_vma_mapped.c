@@ -230,8 +230,9 @@ next_pte:
 					__vma_address(pvmw->page, pvmw->vma) +
 					thp_size(pvmw->page))
 				return not_found(pvmw);
-			/* Did we cross page table boundary? */
+			/* this never crosses the page table boundary */
 			if (pvmw->address % PMD_SIZE == 0) {
+				VM_WARN_ON(1);
 				pte_unmap(pvmw->pte);
 				if (pvmw->ptl) {
 					spin_unlock(pvmw->ptl);
