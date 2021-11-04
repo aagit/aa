@@ -5491,10 +5491,11 @@ long follow_hugetlb_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	int err = -EFAULT, refs;
 
 	while (vaddr < vma->vm_end && remainder) {
-		pte_t *pte;
+		pte_t *pte, pteval;
 		spinlock_t *ptl = NULL;
 		int absent;
 		struct page *page;
+		bool unshare;
 
 		/*
 		 * If we have a pending SIGKILL, don't keep faulting pages and
@@ -5516,7 +5517,11 @@ long follow_hugetlb_page(struct mm_struct *mm, struct vm_area_struct *vma,
 				      huge_page_size(h));
 		if (pte)
 			ptl = huge_pte_lock(h, mm, pte);
-		absent = !pte || huge_pte_none(huge_ptep_get(pte));
+		absent = !pte;
+		if (!absent) {
+			pteval = huge_ptep_get(pte);
+			absent = huge_pte_none(pteval);
+		}
 
 		/*
 		 * When coredumping, it suits get_dump_page if we just return
@@ -5543,9 +5548,12 @@ long follow_hugetlb_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		 * both cases, and because we can't follow correct pages
 		 * directly from any kind of swap entries.
 		 */
-		if (absent || is_swap_pte(huge_ptep_get(pte)) ||
-		    ((flags & FOLL_WRITE) &&
-		      !huge_pte_write(huge_ptep_get(pte)))) {
+		unshare = false;
+		if (absent || is_swap_pte(pteval) ||
+		    (!huge_pte_write(pteval) &&
+		     ((flags & FOLL_WRITE) ||
+		      (unshare = gup_must_unshare(flags, pte_page(pteval),
+						  true))))) {
 			vm_fault_t ret;
 			unsigned int fault_flags = 0;
 
@@ -5553,6 +5561,8 @@ long follow_hugetlb_page(struct mm_struct *mm, struct vm_area_struct *vma,
 				spin_unlock(ptl);
 			if (flags & FOLL_WRITE)
 				fault_flags |= FAULT_FLAG_WRITE;
+			else if (unshare)
+				fault_flags |= FAULT_FLAG_UNSHARE;
 			if (locked)
 				fault_flags |= FAULT_FLAG_ALLOW_RETRY |
 					FAULT_FLAG_KILLABLE;
@@ -6253,6 +6263,22 @@ retry:
 	ptl = huge_pte_lock(h, mm, ptep);
 	pte = huge_ptep_get(ptep);
 	if (pte_present(pte)) {
+		struct page *head_page = pte_page(pte);
+		/*
+		 * gup_must_unshare() isn't strictly needed in
+		 * follow_page() as long as all follow_page() users
+		 * never can expose the page payload to userland or
+		 * devices. follow_page_mask() isn't invoked by the
+		 * hugetlb paths (hugetlbfs goes through
+		 * follow_hugetlb_page() instead of
+		 * follow_page_mask()). So the gup_must_unshare()
+		 * check here is just in case.
+		 */
+		if (!huge_pte_write(pte) &&
+		    gup_must_unshare(flags, head_page, true)) {
+			page = NULL;
+			goto out;
+		}
 		page = pte_page(pte) +
 			((address & ~huge_page_mask(h)) >> PAGE_SHIFT);
 		/*
