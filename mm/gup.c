@@ -63,8 +63,6 @@ static __always_inline bool __gup_must_unshare(unsigned int flags,
 		return false;
 	if (PageKsm(page))
 		return false;
-	if (PageHuge(page)) /* FIXME */
-		return false;
 	if (is_head) {
 		if (PageTransHuge(page)) {
 			if (!is_fast_only_in_irq(irq_safe))
@@ -73,6 +71,7 @@ static __always_inline bool __gup_must_unshare(unsigned int flags,
 		}
 		BUG();
 	} else {
+		VM_BUG_ON(PageHuge(page));
 		if (!is_fast_only_in_irq(irq_safe))
 			return page_mapcount(page) > 1;
 		return page_anon_shared_irqsafe(page);
