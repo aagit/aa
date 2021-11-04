@@ -63,8 +63,8 @@ static __always_inline bool __gup_must_unshare(unsigned int flags,
 		return false;
 	if (PageKsm(page))
 		return false;
-	if (PageHuge(page)) /* FIXME */
-		return false;
+	if (PageHuge(page))
+		return __page_mapcount(page) > 1;
 	if (is_head) {
 		if (PageTransHuge(page)) {
 			if (!is_fast_only_in_irq(irq_safe))
