@@ -6185,18 +6185,20 @@ follow_huge_pd(struct vm_area_struct *vma,
 }
 
 struct page * __weak
-follow_huge_pmd(struct mm_struct *mm, unsigned long address,
+follow_huge_pmd(struct vm_area_struct *vma, unsigned long address,
 		pmd_t *pmd, int flags)
 {
 	struct page *page = NULL;
 	spinlock_t *ptl;
 	pte_t pte;
+	struct mm_struct *mm;
 
 	/* FOLL_GET and FOLL_PIN are mutually exclusive. */
 	if (WARN_ON_ONCE((flags & (FOLL_PIN | FOLL_GET)) ==
 			 (FOLL_PIN | FOLL_GET)))
 		return NULL;
 
+	mm = vma->vm_mm;
 retry:
 	ptl = pmd_lockptr(mm, pmd);
 	spin_lock(ptl);
