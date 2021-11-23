@@ -447,6 +447,7 @@ extern pgprot_t protection_map[16];
  * @FAULT_FLAG_INSTRUCTION: The fault was during an instruction fetch.
  * @FAULT_FLAG_INTERRUPTIBLE: The fault can be interrupted by non-fatal signals.
  * @FAULT_FLAG_UNSHARE: GUP invoked a COR fault to unshare the wrprotected page.
+ * @FAULT_FLAG_FAKECOW: Fake the COW just to mimic the timings.
  *
  * About @FAULT_FLAG_ALLOW_RETRY and @FAULT_FLAG_TRIED: we can specify
  * whether we would allow page faults to retry by specifying these two
@@ -480,6 +481,7 @@ enum fault_flag {
 	FAULT_FLAG_INTERRUPTIBLE =	1 << 9,
 	FAULT_FLAG_UNSHARE =		1 << 10,
 	FAULT_FLAG_UNSHARE_MM_SYNC =	1 << 11,
+	FAULT_FLAG_FAKECOW =		1 << 12,
 };
 
 /*
