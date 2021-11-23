@@ -55,6 +55,7 @@ void rmap_walk_ksm(struct page *page, struct rmap_walk_control *rwc);
 void ksm_migrate_page(struct page *newpage, struct page *oldpage);
 bool reuse_ksm_page(struct page *page,
 			struct vm_area_struct *vma, unsigned long address);
+bool is_ksm_random_distribution_enabled(void);
 
 #else  /* !CONFIG_KSM */
 
@@ -93,6 +94,12 @@ static inline bool reuse_ksm_page(struct page *page,
 {
 	return false;
 }
+
+static inline bool is_ksm_random_distribution_enabled(void)
+{
+	return false;
+}
+
 #endif /* CONFIG_MMU */
 #endif /* !CONFIG_KSM */
 
