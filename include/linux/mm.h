@@ -428,6 +428,7 @@ extern pgprot_t protection_map[16];
  * @FAULT_FLAG_INTERRUPTIBLE: The fault can be interrupted by non-fatal signals.
  * @FAULT_FLAG_UNSHARE: GUP invoked a COR fault to unshare the wrprotected page.
  * @FAULT_FLAG_UNSHARE_MM_SYNC: GUP invoked COR to deliver LONGTERM coherency.
+ * @FAULT_FLAG_FAKECOW: Fake the COW just to mimic the timings.
  *
  * About @FAULT_FLAG_ALLOW_RETRY and @FAULT_FLAG_TRIED: we can specify
  * whether we would allow page faults to retry by specifying these two
@@ -460,6 +461,7 @@ extern pgprot_t protection_map[16];
 #define FAULT_FLAG_INTERRUPTIBLE		0x200
 #define FAULT_FLAG_UNSHARE			0x400
 #define FAULT_FLAG_UNSHARE_MM_SYNC		0x800
+#define FAULT_FLAG_FAKECOW			0x1000
 
 /*
  * The default fault flags that should be used by most of the
