@@ -2099,6 +2099,7 @@ static void cmp_and_merge_page(struct page *page, struct rmap_item *rmap_item)
 	bool max_page_sharing_bypass = false;
 
 	stable_node = page_stable_node(page);
+	checksum = calc_checksum(page);
 	if (stable_node) {
 		if (stable_node->head != &migrate_nodes &&
 		    get_kpfn_nid(READ_ONCE(stable_node->kpfn)) !=
@@ -2116,6 +2117,17 @@ static void cmp_and_merge_page(struct page *page, struct rmap_item *rmap_item)
 		 */
 		if (!is_page_sharing_candidate(stable_node))
 			max_page_sharing_bypass = true;
+	} else {
+		/*
+		 * If the hash value of the page has changed from the last
+		 * time we calculated it, this page is changing frequently:
+		 * therefore we don't want to write protect it.
+		 */
+		if (rmap_item->oldchecksum != checksum) {
+			rmap_item->oldchecksum = checksum;
+			remove_rmap_item_from_tree(rmap_item);
+			return;
+		}
 	}
 
 	/* We first start with searching the page inside the stable tree */
@@ -2143,18 +2155,6 @@ static void cmp_and_merge_page(struct page *page, struct rmap_item *rmap_item)
 			unlock_page(kpage);
 		}
 		put_page(kpage);
-		return;
-	}
-
-	/*
-	 * If the hash value of the page has changed from the last time
-	 * we calculated it, this page is changing frequently: therefore we
-	 * don't want to insert it in the unstable tree, and we don't want
-	 * to waste our time searching for something identical to it there.
-	 */
-	checksum = calc_checksum(page);
-	if (rmap_item->oldchecksum != checksum) {
-		rmap_item->oldchecksum = checksum;
 		return;
 	}
 
