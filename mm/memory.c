@@ -2846,6 +2846,7 @@ static vm_fault_t __wp_page_copy(struct vm_fault *vmf, bool unshare)
 	pte_t entry;
 	int page_copied = 0;
 	struct mmu_notifier_range range;
+	bool fakecow = false;
 
 	if (unlikely(anon_vma_prepare(vma)))
 		goto oom;
@@ -2902,6 +2903,10 @@ static vm_fault_t __wp_page_copy(struct vm_fault *vmf, bool unshare)
 		}
 		flush_cache_page(vma, vmf->address, pte_pfn(vmf->orig_pte));
 		entry = mk_pte(new_page, vma->vm_page_prot);
+		if (unlikely(fakecow)) {
+			VM_WARN_ON_ONCE_PAGE(!PageAnon(old_page), old_page);
+			entry = mk_pte(old_page, vma->vm_page_prot);
+		}
 		entry = pte_sw_mkyoung(entry);
 		if (likely(!unshare))
 			entry = maybe_mkwrite(pte_mkdirty(entry), vma);
@@ -2928,6 +2933,20 @@ static vm_fault_t __wp_page_copy(struct vm_fault *vmf, bool unshare)
 		 */
 		set_pte_at_notify(mm, vmf->address, vmf->pte, entry);
 		update_mmu_cache(vma, vmf->address, vmf->pte);
+		if (unlikely(fakecow)) {
+			/*
+			 * Release the refcount taken by do_wp_page
+			 * before releasing the PT lock, to simulate
+			 * the refcount of new_page.
+			 */
+			put_page(old_page);
+			/*
+			 * Get an extra refcount, to simulate the
+			 * refcount of old_page.
+			 */
+			get_page(new_page);
+			swap(old_page, new_page);
+		}
 		if (old_page) {
 			/*
 			 * Only after switching the pte to the new page may
@@ -3353,6 +3372,10 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 			unlock_page(vmf->page);
 			if (!reused)
 				goto copy;
+			if (is_ksm_random_distribution_enabled()) {
+				vmf->flags |= FAULT_FLAG_FAKECOW;
+				goto copy;
+			}
 			wp_page_reuse(vmf);
 			return VM_FAULT_WRITE;
 		}
@@ -3367,9 +3390,13 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 				 */
 				page_move_anon_rmap(vmf->page, vma);
 			}
-			unlock_page(vmf->page);
-			wp_page_reuse(vmf);
-			return VM_FAULT_WRITE;
+			if (likely(!(vma->vm_flags & VM_MERGEABLE) ||
+				   !is_ksm_random_distribution_enabled())) {
+				unlock_page(vmf->page);
+				wp_page_reuse(vmf);
+				return VM_FAULT_WRITE;
+			}
+			vmf->flags |= FAULT_FLAG_FAKECOW;
 		}
 		unlock_page(vmf->page);
 	} else if (unlikely((vma->vm_flags & (VM_WRITE|VM_SHARED)) ==
