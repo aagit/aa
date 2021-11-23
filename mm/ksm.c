@@ -285,6 +285,46 @@ static unsigned int zero_checksum __read_mostly;
 /* Whether to merge empty (zeroed) pages with actual zero pages */
 static bool ksm_use_zero_pages __read_mostly;
 
+/*
+ * The COW side channel that allows user mode or guest mode to detect
+ * which pages have been merged by KSM and which not is obfuscated by
+ * setting ksm_unmatched_random_distribution > 0.
+ *
+ * If ksm_unmatched_random_distribution is > 0 and not equal to
+ * ksm_matched_random_distribution, a statistical attack repeating the
+ * measurement over and over again could still over time measure a
+ * different probability of high COW latencies for pages that are
+ * merged vs those that aren't.
+ *
+ * To fully close the side channel (not just to obfuscate it) both
+ * ksm_matched_random_distribution and
+ * ksm_unmatched_random_distribution must be > 0 and set to the same
+ * value.
+ *
+ * ksm_unmatched_random_distribution when set to a value > 0 will
+ * waste extra CPU in extra COWs and it will teardown more THP in the
+ * wrprotection process, but it won't alter the KSM merging
+ * effectiveness.
+ *
+ * ksm_matched_random_distribution when set to a value < 100 won't waste
+ * much extra CPU besides in the KSM scan itself, but it will remove
+ * the determinism from the KSM merging (i.e. a page that can be
+ * merged may indefinitely not be merged if randomly unlucky over and
+ * over again at every pass).
+ *
+ * Test suites that validate the KSM scan effectiveness may want to
+ * set ksm_matched_random_distribution to 100, in order to retain
+ * determinism of the KSM merging behavior.
+ *
+ * The only supported values at the moment are 50,100 for
+ * ksm_matched_random_distribution and 50,0 for
+ * ksm_unmatched_random_distribution, but it would be possible to fill
+ * the whole range by implementing the Bernoulli distribution for the
+ * respective value.
+ */
+static unsigned int ksm_matched_random_distribution __read_mostly = 50;
+static unsigned int ksm_unmatched_random_distribution __read_mostly = 50;
+
 #ifdef CONFIG_NUMA
 /* Zeroed when merging across nodes is not allowed */
 static unsigned int ksm_merge_across_nodes = 1;
@@ -1256,7 +1296,8 @@ out:
  * This function returns 0 if the pages were merged, -EFAULT otherwise.
  */
 static int try_to_merge_one_page(struct vm_area_struct *vma,
-				 struct page *page, struct page *kpage)
+				 struct page *page, struct page *kpage,
+				 bool wrprotect_only)
 {
 	pte_t orig_pte = __pte(0);
 	int err = -EFAULT;
@@ -1290,12 +1331,16 @@ static int try_to_merge_one_page(struct vm_area_struct *vma,
 	 */
 	if (write_protect_page(vma, page, &orig_pte) == 0) {
 		if (!kpage) {
-			/*
-			 * While we hold page lock, upgrade page from
-			 * PageAnon+anon_vma to PageKsm+NULL stable_node:
-			 * stable_tree_insert() will update stable_node.
-			 */
-			set_page_stable_node(page, NULL);
+			if (!wrprotect_only) {
+				/*
+				 * While we hold page lock, upgrade
+				 * page from PageAnon+anon_vma to
+				 * PageKsm+NULL stable_node:
+				 * stable_tree_insert() will update
+				 * stable_node.
+				 */
+				set_page_stable_node(page, NULL);
+			}
 			mark_page_accessed(page);
 			/*
 			 * Page reclaim just frees a clean page with no dirty
@@ -1324,6 +1369,23 @@ out:
 	return err;
 }
 
+static void try_to_write_protect_page(struct rmap_item *rmap_item,
+				      struct page *page)
+{
+	struct mm_struct *mm = rmap_item->mm;
+	struct vm_area_struct *vma;
+
+	if (READ_ONCE(ksm_unmatched_random_distribution) == 0 ||
+	    !can_write_protect())
+		return;
+
+	mmap_read_lock(mm);
+	vma = find_mergeable_vma(mm, rmap_item->address);
+	if (vma)
+		try_to_merge_one_page(vma, page, NULL, true);
+	mmap_read_unlock(mm);
+}
+
 /*
  * try_to_merge_with_ksm_page - like try_to_merge_two_pages,
  * but no new kernel page is allocated: kpage must already be a ksm page.
@@ -1342,7 +1404,7 @@ static int try_to_merge_with_ksm_page(struct rmap_item *rmap_item,
 	if (!vma)
 		goto out;
 
-	err = try_to_merge_one_page(vma, page, kpage);
+	err = try_to_merge_one_page(vma, page, kpage, false);
 	if (err)
 		goto out;
 
@@ -2143,6 +2205,12 @@ static void cmp_and_merge_page(struct page *page, struct rmap_item *rmap_item)
 		if (PTR_ERR(kpage) == -EBUSY)
 			return;
 
+		if (READ_ONCE(ksm_matched_random_distribution) != 100 &&
+		    !can_write_protect()) {
+			put_page(kpage);
+			return;
+		}
+
 		err = try_to_merge_with_ksm_page(rmap_item, page, kpage);
 		if (!err) {
 			/*
@@ -2169,7 +2237,7 @@ static void cmp_and_merge_page(struct page *page, struct rmap_item *rmap_item)
 		vma = find_mergeable_vma(mm, rmap_item->address);
 		if (vma) {
 			err = try_to_merge_one_page(vma, page,
-					ZERO_PAGE(rmap_item->address));
+					ZERO_PAGE(rmap_item->address), false);
 		} else {
 			/*
 			 * If the vma is out of date, we do not need to
@@ -2189,6 +2257,12 @@ static void cmp_and_merge_page(struct page *page, struct rmap_item *rmap_item)
 		unstable_tree_search_insert(rmap_item, page, &tree_page);
 	if (tree_rmap_item) {
 		bool split;
+
+		if (READ_ONCE(ksm_matched_random_distribution) != 100 &&
+		    !can_write_protect()) {
+			put_page(tree_page);
+			return;
+		}
 
 		kpage = try_to_merge_two_pages(rmap_item, page,
 						tree_rmap_item, tree_page);
@@ -2245,7 +2319,8 @@ static void cmp_and_merge_page(struct page *page, struct rmap_item *rmap_item)
 			split_huge_page(page);
 			unlock_page(page);
 		}
-	}
+	} else
+		try_to_write_protect_page(rmap_item, page);
 }
 
 static struct rmap_item *get_next_rmap_item(struct mm_slot *mm_slot,
@@ -2744,6 +2819,13 @@ bool reuse_ksm_page(struct page *page,
 
 	return true;
 }
+
+bool is_ksm_random_distribution_enabled(void)
+{
+	return READ_ONCE(ksm_matched_random_distribution) != 100 ||
+		READ_ONCE(ksm_unmatched_random_distribution);
+}
+
 #ifdef CONFIG_MIGRATION
 void ksm_migrate_page(struct page *newpage, struct page *oldpage)
 {
@@ -3084,6 +3166,65 @@ static ssize_t use_zero_pages_store(struct kobject *kobj,
 }
 KSM_ATTR(use_zero_pages);
 
+static ssize_t matched_random_distribution_show(struct kobject *kobj,
+				      struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%u\n", ksm_matched_random_distribution);
+}
+static ssize_t unmatched_random_distribution_show(struct kobject *kobj,
+					struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%u\n", ksm_unmatched_random_distribution);
+}
+static ssize_t matched_random_distribution_store(struct kobject *kobj,
+				       struct kobj_attribute *attr,
+				       const char *buf, size_t count)
+{
+	int err;
+	unsigned char value;
+
+	err = kstrtou8(buf, 0, &value);
+	if (err)
+		return -EINVAL;
+
+	switch (value) {
+	case 50:
+	case 100:
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	WRITE_ONCE(ksm_matched_random_distribution, value);
+
+	return count;
+}
+static ssize_t unmatched_random_distribution_store(struct kobject *kobj,
+					 struct kobj_attribute *attr,
+					 const char *buf, size_t count)
+{
+	int err;
+	unsigned char value;
+
+	err = kstrtou8(buf, 0, &value);
+	if (err)
+		return -EINVAL;
+
+	switch (value) {
+	case 0:
+	case 50:
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	WRITE_ONCE(ksm_unmatched_random_distribution, value);
+
+	return count;
+}
+KSM_ATTR(matched_random_distribution);
+KSM_ATTR(unmatched_random_distribution);
+
 static ssize_t max_page_sharing_show(struct kobject *kobj,
 				     struct kobj_attribute *attr, char *buf)
 {
@@ -3227,6 +3368,8 @@ static struct attribute *ksm_attrs[] = {
 	&stable_node_dups_attr.attr,
 	&stable_node_chains_prune_millisecs_attr.attr,
 	&use_zero_pages_attr.attr,
+	&matched_random_distribution_attr.attr,
+	&unmatched_random_distribution_attr.attr,
 	NULL,
 };
 
