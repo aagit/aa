@@ -38,6 +38,7 @@
 #include <linux/freezer.h>
 #include <linux/oom.h>
 #include <linux/numa.h>
+#include <linux/random.h>
 
 #include <asm/tlbflush.h>
 #include "internal.h"
@@ -124,12 +125,19 @@ struct mm_slot {
 	struct mm_struct *mm;
 };
 
+#define NR_RANDOM_LONGS 8
+struct random_batch {
+	unsigned long bits[NR_RANDOM_LONGS];
+	unsigned int bit;
+};
+
 /**
  * struct ksm_scan - cursor for scanning
  * @mm_slot: the current mm_slot we are scanning
  * @address: the next address inside that to be scanned
  * @rmap_list: link to the next rmap to be scanned in the rmap_list
  * @seqnr: count of completed full scans (needed when removing unstable node)
+ * @random_bytes: random payload batching
  *
  * There is only the one ksm_scan instance of this cursor structure.
  */
@@ -138,6 +146,7 @@ struct ksm_scan {
 	unsigned long address;
 	struct rmap_item **rmap_list;
 	unsigned long seqnr;
+	struct random_batch random_batch;
 };
 
 /**
@@ -302,6 +311,23 @@ static DEFINE_SPINLOCK(ksm_mmlist_lock);
 #define KSM_KMEM_CACHE(__struct, __flags) kmem_cache_create("ksm_"#__struct,\
 		sizeof(struct __struct), __alignof__(struct __struct),\
 		(__flags), NULL)
+
+/*
+ * Decide if to write protect pages whose payload didn't change over
+ * the last KSM scans (according to checksum) based on a Bernoulli
+ * distribution with p = 1/2.
+ */
+static bool can_write_protect(void)
+{
+	struct random_batch *random = &ksm_scan.random_batch;
+	if (!random->bit) {
+		get_random_bytes(&random->bits,
+				 sizeof(random->bits));
+		random->bit = sizeof(random->bits) * 8;
+	}
+	random->bit--;
+	return test_bit(random->bit, random->bits);
+}
 
 static int __init ksm_slab_init(void)
 {
