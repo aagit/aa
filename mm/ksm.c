@@ -2568,7 +2568,7 @@ struct page *ksm_might_need_to_copy(struct page *page,
 		if (page_stable_node(page) &&
 		    !(ksm_run & KSM_RUN_UNMERGE))
 			return page;	/* no need to copy it */
-	} else if (!anon_vma) {
+	} else if (!anon_vma || !page_mapped(page)) {
 		return page;		/* no need to copy it */
 	} else if (anon_vma->root == vma->anon_vma->root &&
 		 page->index == linear_page_index(vma, address)) {
