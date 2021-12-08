@@ -544,11 +544,16 @@ static int break_ksm(struct vm_area_struct *vma, unsigned long addr)
 				FOLL_GET | FOLL_MIGRATION | FOLL_REMOTE);
 		if (IS_ERR_OR_NULL(page))
 			break;
-		if (PageKsm(page))
+		if (PageKsm(page)) {
+			bool cor = is_ksm_random_distribution_enabled();
 			ret = handle_mm_fault(vma, addr,
-					      FAULT_FLAG_WRITE | FAULT_FLAG_REMOTE,
+					      (cor ?
+					       FAULT_FLAG_UNSHARE |
+					       FAULT_FLAG_UNSHARE_MM_SYNC :
+					       FAULT_FLAG_WRITE) |
+					      FAULT_FLAG_REMOTE,
 					      NULL);
-		else
+		} else
 			ret = VM_FAULT_WRITE;
 		put_page(page);
 	} while (!(ret & (VM_FAULT_WRITE | VM_FAULT_SIGBUS | VM_FAULT_SIGSEGV | VM_FAULT_OOM)));
