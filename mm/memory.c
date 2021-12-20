@@ -3423,21 +3423,8 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 		if (PageKsm(vmf->page) && (PageSwapCache(vmf->page) ||
 					   page_count(vmf->page) != 1))
 			goto copy;
-		if (!trylock_page(vmf->page)) {
-			get_page(vmf->page);
-			pte_unmap_unlock(vmf->pte, vmf->ptl);
-			lock_page(vmf->page);
-			vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd,
-					vmf->address, &vmf->ptl);
-			if (!pte_same(*vmf->pte, vmf->orig_pte)) {
-				update_mmu_tlb(vma, vmf->address, vmf->pte);
-				unlock_page(vmf->page);
-				pte_unmap_unlock(vmf->pte, vmf->ptl);
-				put_page(vmf->page);
-				return 0;
-			}
-			put_page(vmf->page);
-		}
+		if (!smart_lock_page(vmf))
+			return 0;
 		if (PageKsm(vmf->page)) {
 			bool reused = reuse_ksm_page(vmf->page, vmf->vma,
 						     vmf->address);
