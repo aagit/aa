@@ -478,7 +478,7 @@ extern int __swp_swapcount(swp_entry_t entry);
 extern int swp_swapcount(swp_entry_t entry);
 extern struct swap_info_struct *page_swap_info(struct page *);
 extern struct swap_info_struct *swp_swap_info(swp_entry_t entry);
-extern bool can_read_pin_swap_page(struct page *);
+extern bool can_read_pin_swap_page(struct page *, unsigned int);
 extern bool reuse_swap_page(struct page *, int *);
 extern int try_to_free_swap(struct page *);
 struct backing_dev_info;
@@ -628,10 +628,10 @@ static inline int swp_swapcount(swp_entry_t entry)
 	return 0;
 }
 
-static inline bool can_read_pin_swap_page(struct page *page)
+static inline bool can_read_pin_swap_page(struct page *page, unsigned int flags)
 {
 	if (unlikely(PageKsm(page)))
-		return true;
+		return !(flags & FOLL_MM_SYNC);
 	return page_trans_huge_mapcount(page, NULL) <= 1;
 }
 

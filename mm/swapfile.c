@@ -1726,16 +1726,21 @@ again:
  * it should not cause any side effects to the page type. It is also a
  * readonly PIN so there's no concern for stable pages.
  */
-bool can_read_pin_swap_page(struct page *page)
+bool can_read_pin_swap_page(struct page *page, unsigned int flags)
 {
 	VM_BUG_ON_PAGE(!PageLocked(page), page);
 
 	/*
-	 * If the !PageKsm changed to PageKsm from under us before the
-	 * page lock was taken, always allow GUP pins on PageKsm.
+	 * If the caller is a short term read GUP pin and the !PageKsm
+	 * changed to PageKsm from under us before the page lock was
+	 * taken, always allow short term GUP pins on PageKsm.
+	 *
+	 * If FOLL_MM_SYNC is set we need to prevent any PIN to ever
+	 * materialize on PageKsm and we need to unshare the PageKsm
+	 * with COR fault instead.
 	 */
 	if (unlikely(PageKsm(page)))
-		return true;
+		return !(flags & FOLL_MM_SYNC);
 
 	return page_trans_huge_map_swapcount(page, NULL, NULL) <= 1;
 }
