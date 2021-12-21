@@ -1025,14 +1025,13 @@ static u32 calc_checksum(struct page *page)
 }
 
 static int write_protect_page(struct vm_area_struct *vma, struct page *page,
-			      pte_t *orig_pte)
+			      pte_t *orig_pte, bool create_ksm)
 {
 	struct mm_struct *mm = vma->vm_mm;
 	struct page_vma_mapped_walk pvmw = {
 		.page = page,
 		.vma = vma,
 	};
-	int swapped;
 	int err = -EFAULT;
 	struct mmu_notifier_range range;
 
@@ -1052,12 +1051,36 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 	if (WARN_ONCE(!pvmw.pte, "Unexpected PMD mapping?"))
 		goto out_unlock;
 
+	/*
+	 * NOTE: The page lock and the PT lock cannot be released from
+	 * this point until after the set_page_stable_node().
+	 *
+	 * For readonly FOLL_LONGTERM|FOLL_MM_SYNC pins to retain
+	 * synchronicity on VM_MERGEABLE vmas, here we cannot risk to
+	 * convert to PageKsm any anon page that might have
+	 * outstanding GUP pins. We convert the anon page to PageKsm
+	 * in place so this relies on the reuse_swap_page() check in
+	 * gup_must_unshare() happening in the PageAnon path after
+	 * trylock_page().
+	 *
+	 * The page lock guarantees if gup-fast is running from under
+	 * us and it sees a PageAnon, it'll always take the page lock
+	 * and re-check PageKsm before taking a readonly pin.
+	 *
+	 * In other words thanks to gup_must_unshare() we don't need
+	 * do this check while the pgtable is empty to serialize
+	 * against gup-fast.
+	 *
+	 * Gup-slow cannot race thanks to the PT lock.
+	 */
+	if (page_mapcount(page) + 1 + PageSwapCache(page) != page_count(page))
+		goto out_unlock;
+
 	if (pte_write(*pvmw.pte) || pte_dirty(*pvmw.pte) ||
 	    (pte_protnone(*pvmw.pte) && pte_savedwrite(*pvmw.pte)) ||
 						mm_tlb_flush_pending(mm)) {
 		pte_t entry;
 
-		swapped = PageSwapCache(page);
 		flush_cache_page(vma, pvmw.address, page_to_pfn(page));
 		/*
 		 * Ok this is tricky, when get_user_pages_fast() run it doesn't
@@ -1074,14 +1097,6 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 		 * See Documentation/vm/mmu_notifier.rst
 		 */
 		entry = ptep_clear_flush(vma, pvmw.address, pvmw.pte);
-		/*
-		 * Check that no O_DIRECT or similar I/O is in progress on the
-		 * page
-		 */
-		if (page_mapcount(page) + 1 + swapped != page_count(page)) {
-			set_pte_at(mm, pvmw.address, pvmw.pte, entry);
-			goto out_unlock;
-		}
 		if (pte_dirty(entry))
 			set_page_dirty(page);
 
@@ -1093,6 +1108,15 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 	}
 	*orig_pte = *pvmw.pte;
 	err = 0;
+
+	if (create_ksm) {
+		/*
+		 * While we hold page lock, upgrade page from
+		 * PageAnon+anon_vma to PageKsm+NULL stable_node:
+		 * stable_tree_insert() will update stable_node.
+		 */
+		set_page_stable_node(page, NULL);
+	}
 
 out_unlock:
 	page_vma_mapped_walk_done(&pvmw);
@@ -1137,6 +1161,22 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
 
 	ptep = pte_offset_map_lock(mm, pmd, addr, &ptl);
 	if (!pte_same(*ptep, orig_pte)) {
+		pte_unmap_unlock(ptep, ptl);
+		goto out_mn;
+	}
+
+	/*
+	 * Re-check there's still no GUP pin under page lock
+	 * (serializes gup-fast) and PT lock (serializes gup-slow) on
+	 * the anon page before merging it with the PageKsm.
+	 *
+	 * The same considerations of write_protect_page() applies
+	 * here as well.
+	 *
+	 * NOTE: the page lock and PT lock cannot be released until after
+	 * the pte has been updated to point to the PageKsm.
+	 */
+	if (page_mapcount(page) + 1 + PageSwapCache(page) != page_count(page)) {
 		pte_unmap_unlock(ptep, ptl);
 		goto out_mn;
 	}
@@ -1226,14 +1266,8 @@ static int try_to_merge_one_page(struct vm_area_struct *vma,
 	 * ptes are necessarily already write-protected.  But in either
 	 * case, we need to lock and check page_count is not raised.
 	 */
-	if (write_protect_page(vma, page, &orig_pte) == 0) {
+	if (write_protect_page(vma, page, &orig_pte, !kpage) == 0) {
 		if (!kpage) {
-			/*
-			 * While we hold page lock, upgrade page from
-			 * PageAnon+anon_vma to PageKsm+NULL stable_node:
-			 * stable_tree_insert() will update stable_node.
-			 */
-			set_page_stable_node(page, NULL);
 			mark_page_accessed(page);
 			/*
 			 * Page reclaim just frees a clean page with no dirty
