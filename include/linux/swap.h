@@ -630,8 +630,6 @@ static inline int swp_swapcount(swp_entry_t entry)
 
 static inline bool can_read_pin_swap_page(struct page *page)
 {
-	if (unlikely(PageKsm(page)))
-		return true;
 	return page_trans_huge_mapcount(page, NULL) <= 1;
 }
 
