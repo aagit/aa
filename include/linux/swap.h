@@ -633,8 +633,12 @@ static inline bool can_read_pin_swap_page(struct page *page)
 	return page_trans_huge_mapcount(page, NULL) <= 1;
 }
 
-#define reuse_swap_page(page, total_map_swapcount) \
-	(page_trans_huge_mapcount(page, total_map_swapcount) == 1)
+static inline bool reuse_swap_page(struct page *page, int *total_map_swapcount)
+{
+	if (unlikely(PageKsm(page)))
+		return false;
+	return page_trans_huge_mapcount(page, total_map_swapcount) <= 1;
+}
 
 static inline int try_to_free_swap(struct page *page)
 {
