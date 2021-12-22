@@ -40,7 +40,12 @@ static __always_inline bool is_fast_only_in_irq(bool irq_safe)
 	return irq_safe && unlikely(!!irq_count());
 }
 
-static bool gup_must_unshare_slowpath(struct page *page)
+static __always_inline bool gup_must_unshare_ksm(unsigned int flags)
+{
+	return !!(flags & FOLL_MM_SYNC);
+}
+
+static bool gup_must_unshare_slowpath(struct page *page, unsigned int flags)
 {
 	bool must_unshare;
 	/*
@@ -53,6 +58,15 @@ static bool gup_must_unshare_slowpath(struct page *page)
 	 */
 	if (!trylock_page(page))
 		return true;
+	if (PageKsm(page)) {
+		/*
+		 * PageKsm() cannot change anymore while holding the
+		 * page lock and either an extra refcount reference
+		 * (gup-fast varaints) or the PT lock (gup-slow).
+		 */
+		unlock_page(page);
+		return gup_must_unshare_ksm(flags);
+	}
 	must_unshare = !can_read_pin_swap_page(page);
 	unlock_page(page);
 	return must_unshare;
@@ -96,7 +110,7 @@ static __always_inline bool __gup_must_unshare(unsigned int flags,
 	if (!PageAnon(page))
 		return false;
 	if (PageKsm(page))
-		return !!(flags & FOLL_MM_SYNC);
+		return gup_must_unshare_ksm(flags);
 	if (PageHuge(page)) {
 		if (__page_mapcount(page) > 1)
 			return true;
@@ -107,7 +121,7 @@ static __always_inline bool __gup_must_unshare(unsigned int flags,
 			if (!is_fast_only_in_irq(irq_safe)) {
 				if (page_trans_huge_anon_shared(page))
 					return true;
-				return gup_must_unshare_slowpath(page);
+				return gup_must_unshare_slowpath(page, flags);
 			}
 			return true;
 		}
@@ -116,7 +130,7 @@ static __always_inline bool __gup_must_unshare(unsigned int flags,
 		if (!is_fast_only_in_irq(irq_safe)) {
 			if (page_mapcount(page) > 1)
 				return true;
-			return gup_must_unshare_slowpath(page);
+			return gup_must_unshare_slowpath(page, flags);
 		}
 		return true;
 	}
