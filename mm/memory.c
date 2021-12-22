@@ -3281,6 +3281,21 @@ static vm_fault_t wp_page_unshare(struct vm_fault *vmf)
 		 */
 		if (!smart_lock_page(vmf))
 			return 0;
+		if (PageKsm(vmf->page)) {
+			/*
+			 * PageKsm() cannot change anymore while
+			 * holding the page lock. In the unlikely case
+			 * a PageKsm() materialized from under us we
+			 * can retry later. We could also jump into
+			 * the PageKsm locations if FOLL_MM_SYNC is
+			 * set to handle the COR without an extra
+			 * cycle, but this is an unlikely case that
+			 * can stay simple and it's not worth
+			 * optimizing for.
+			 */
+			unlock_page(vmf->page);
+			goto out_unlock;
+		}
 		must_unshare = !can_read_pin_swap_page(vmf->page);
 		unlock_page(vmf->page);
 		if (must_unshare)

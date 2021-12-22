@@ -1038,7 +1038,6 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 		.page = page,
 		.vma = vma,
 	};
-	int swapped;
 	int err = -EFAULT;
 	struct mmu_notifier_range range;
 
@@ -1047,6 +1046,10 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 		goto out;
 
 	BUG_ON(PageTransCompound(page));
+
+	/* racy optimistic check for the fast path */
+	if (page_mapcount(page) + 1 + PageSwapCache(page) != page_count(page))
+		goto out;
 
 	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, vma, mm,
 				pvmw.address,
@@ -1063,7 +1066,6 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 						mm_tlb_flush_pending(mm)) {
 		pte_t entry;
 
-		swapped = PageSwapCache(page);
 		flush_cache_page(vma, pvmw.address, page_to_pfn(page));
 		/*
 		 * Ok this is tricky, when get_user_pages_fast() run it doesn't
@@ -1083,8 +1085,21 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 		/*
 		 * Check that no O_DIRECT or similar I/O is in progress on the
 		 * page
+		 *
+		 * gup-fast cannot be running thanks to the
+		 * ptep_clear_flush(). gup-slow if it runs on the anon
+		 * page and could skip the COR, it'd mean
+		 * page_mapcount is 1 which implies gup-slow is
+		 * serialized against us with the PT lock. If the
+		 * mapcount is > 1 on the anon page or if there were
+		 * swap references by design there cannot be any GUP
+		 * pin. So only if there can be a GUP pin check the
+		 * page_count.
+		 *
+		 * PageSwapCache() is stable too under page lock.
 		 */
-		if (page_mapcount(page) + 1 + swapped != page_count(page)) {
+		if (can_read_pin_swap_page(page) &&
+		    2 + PageSwapCache(page) != page_count(page)) {
 			set_pte_at(mm, pvmw.address, pvmw.pte, entry);
 			goto out_unlock;
 		}
@@ -1123,7 +1138,7 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
 	struct mm_struct *mm = vma->vm_mm;
 	pmd_t *pmd;
 	pte_t *ptep;
-	pte_t newpte;
+	pte_t newpte, oldpte;
 	spinlock_t *ptl;
 	unsigned long addr;
 	int err = -EFAULT;
@@ -1174,7 +1189,28 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
 	 *
 	 * See Documentation/vm/mmu_notifier.rst
 	 */
-	ptep_clear_flush(vma, addr, ptep);
+	oldpte = ptep_clear_flush(vma, addr, ptep);
+	/*
+	 * Check that no O_DIRECT or similar I/O is in progress on the
+	 * page.
+	 *
+	 * gup-fast cannot be running thanks to the
+	 * ptep_clear_flush(). gup-slow if it runs on the anon page
+	 * and could skip the COR, it'd mean page_mapcount is 1 which
+	 * implies gup-slow is serialized against us with the PT
+	 * lock. If the mapcount is > 1 on the anon page or if there
+	 * were swap references by design there cannot be any GUP
+	 * pin. So only if there can be a GUP pin check the
+	 * page_count.
+	 *
+	 * PageSwapCache() is stable too under page lock.
+	 */
+	if (can_read_pin_swap_page(page) &&
+	    2 + PageSwapCache(page) != page_count(page)) {
+		set_pte_at(mm, addr, ptep, oldpte);
+		pte_unmap_unlock(ptep, ptl);
+		goto out_mn;
+	}
 	set_pte_at_notify(mm, addr, ptep, newpte);
 
 	page_remove_rmap(page, false);
