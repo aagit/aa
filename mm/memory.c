@@ -3845,6 +3845,12 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 			page_private(page) != entry.val)) && swapcache)
 		goto out_page;
 
+	/*
+	 * Cannot release the page lock from here until after
+	 * page_mapping is guaranteed to return true on the page
+	 * returned by ksm_might_need_to_copy. See the "anon_vma &&
+	 * !page_mapped()" case of ksm_might_need_to_copy().
+	 */
 	page = ksm_might_need_to_copy(page, vma, vmf->address);
 	if (unlikely(!page)) {
 		ret = VM_FAULT_OOM;
