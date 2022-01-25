@@ -2709,21 +2709,178 @@ void __ksm_exit(struct mm_struct *mm)
 	}
 }
 
+static inline bool ksm_need_to_copy_anon(struct page *page,
+					 struct vm_area_struct *vma,
+					 unsigned long address,
+					 struct anon_vma *anon_vma)
+{
+	if (!anon_vma)
+		return false;
+
+	/*
+	 * The swap entry of THP swapcache cannot be a KSM generated
+	 * swapentry, so the linearity is guaranteed and the anon_vma
+	 * lifetime as well.
+	 */
+	if (PageTransCompound(page)) {
+		/* THP swapcache is always linearly mapped */
+		VM_WARN_ON_ONCE_PAGE(anon_vma->root != vma->anon_vma->root,
+				     page);
+		return false;
+	}
+
+	if (page->index == linear_page_index(vma, address)) {
+		/* microoptimization to avoid re-initializing page->mapping */
+		if (anon_vma == vma->anon_vma)
+			return false;
+
+		/*
+		 * Non linear swap entries can only exist as result of
+		 * the swapout of a PageKsm page. The possibility of
+		 * non linearity of a swap entries invalidates the
+		 * design guarantees of the anon_vma lifetime. The
+		 * "extra" challenges to resolve in the non linear
+		 * case for the page_mapped and !page_mapped case were
+		 * discovered by Hugh Dickins.
+		 */
+		rcu_read_lock();
+		if (!page_mapped(page)) {
+			rcu_read_unlock();
+			/*
+			 * The swapcache is locked and currently
+			 * unmapped, so it cannot be mapped again from
+			 * under us because only do_swap_page() can
+			 * map the swapcache again.
+			 *
+			 * anon_vma was found not null earlier, so the
+			 * swapcache has been previously used by
+			 * another process whose pgtable mapping has
+			 * been freed in the meanwhile.
+			 *
+			 * If we could be certain this was a linear
+			 * swap entry not created by a PageKsm swapout
+			 * event, then we'd be guaranteed the anon_vma
+			 * is still alive even if the swapcache is
+			 * already unmapped. That in fact is the case
+			 * if the swapcache is a THP.
+			 *
+			 * The anon_vma design for linear anon
+			 * mappings (i.e. PageAnon && !PageKsm)
+			 * guarantees that if the current pgtable is
+			 * pointing points to this swapcache that was
+			 * shared by another vma earlier, then they
+			 * had to be part of the same anon_vma_chain
+			 * and in turn the current vma->anon_vma would
+			 * hold an implicit reference on the anon_vma
+			 * we found pointed by the page.
+			 *
+			 * However because this function was invoked
+			 * it means CONFIG_KSM=y and we can't assume
+			 * this swap entry wasn't created by a PageKsm
+			 * swapout. In such case the rmap could be non
+			 * linear and the anon_vma may already have
+			 * been freed (it may not have been part of
+			 * the anon_vma_chain of the current
+			 * vma->anon_vma).
+			 *
+			 * The swapcache is not mapped so we can still
+			 * reuse it, but before doing so we must clear
+			 * page->mapping to ensure
+			 * __page_set_anon_rmap will re-initialize the
+			 * page->mapping to point to the the
+			 * anon_vma_chain of the current vma->anon_vma
+			 * (i.e. that it will not bail out at the
+			 * PageAnon check).
+			 *
+			 * It is also critical that the page lock here
+			 * cannot be released until the page is mapped
+			 * (and page_mapped returns true again).
+			 */
+			page->mapping = NULL;
+			return false;
+		} else {
+			bool linear;
+			/*
+			 * If this was a linear swap entry created by
+			 * a "PageAnon && !PageKsm" it wouldn't matter
+			 * if the page is mapped or not: the anon_vma
+			 * lifetime would be safe by design even if it
+			 * belonged to a different vma.
+			 *
+			 * However if the swap entry is non linear
+			 * even if we find page_mapped() is true, we
+			 * cannot assume the other mapping hasn't been
+			 * freed from under us and the anon_vma also
+			 * hasn't been freed from under us right after
+			 * we checked page_mapped(). This is because
+			 * like in the !page_mapped() case, if this
+			 * function was invoked it means CONFIG_KSM=y
+			 * and this swap entry may be non linear if it
+			 * was created by a PageKsm swapout. In such
+			 * case the anon_vma won't remain allocated
+			 * implicitly through the current
+			 * vma->anon_vma reference because it could be
+			 * even part of a different anon_vma_chain
+			 * that is being freed by a different process
+			 * in parallel.
+			 *
+			 * So because we found the page mapped we have
+			 * to rely on RCU (using the same RCU
+			 * guarantees relied upon by
+			 * page_get_anon_vma()) before we can
+			 * dereference the anon_vma pointer in order
+			 * to validate if it's safe to share because
+			 * it is part of the same anon_vma_chain of
+			 * the current vma->anon_vma. Alternatively if
+			 * it is not linear, it means it was created
+			 * through a PageKsm swapout and we have to
+			 * create a private copy instead.
+			 *
+			 * Unlike page_get_anon_vma():
+			 *
+			 * 1) the page is locked so the anon_vma
+			 *    pointer cannot change from under us and
+			 *    we don't need to re-read it with
+			 *    READ_ONCE().
+			 *
+			 * 2) all we care about is that the anon_vma
+			 *    will not be reused and the
+			 *    anon_vma->root cannot change for as long
+			 *    as the rcu_read_lock is being hold. It's
+			 *    ok if the page is unmapped from under us
+			 *    while we do the check, because if pass
+			 *    the check the it means even if the page
+			 *    was unmapped, the anon_vma the page
+			 *    points to is linear with with the
+			 *    current vma and in turn it shares the
+			 *    same anon_vma_chain with the current
+			 *    vma->anon_vma and cannot be freed by
+			 *    design since the current vma holds an
+			 *    implicit reference on it.
+			 */
+			linear = anon_vma->root == vma->anon_vma->root;
+			rcu_read_unlock();
+			if (linear)
+				return false;
+		}
+	}
+	return true;
+}
+
 struct page *ksm_might_need_to_copy(struct page *page,
 			struct vm_area_struct *vma, unsigned long address)
 {
 	struct anon_vma *anon_vma = page_anon_vma(page);
 	struct page *new_page;
 
+	VM_BUG_ON_PAGE(!PageLocked(page), page);
+
 	if (PageKsm(page)) {
 		if (page_stable_node(page) &&
 		    !(ksm_run & KSM_RUN_UNMERGE))
 			return page;	/* no need to copy it */
-	} else if (!anon_vma) {
+	} else if (!ksm_need_to_copy_anon(page, vma, address, anon_vma)) {
 		return page;		/* no need to copy it */
-	} else if (page->index == linear_page_index(vma, address) &&
-			anon_vma->root == vma->anon_vma->root) {
-		return page;		/* still no need to copy it */
 	}
 	if (!PageUptodate(page))
 		return page;		/* let do_swap_page report the error */
