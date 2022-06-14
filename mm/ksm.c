@@ -147,6 +147,7 @@ struct ksm_scan {
 	struct rmap_item **rmap_list;
 	unsigned long seqnr;
 	struct random_batch random_batch;
+	bool thp_skip_young;
 };
 
 /**
@@ -326,6 +327,16 @@ static bool ksm_use_zero_pages __read_mostly;
  */
 static unsigned int ksm_matched_random_distribution __read_mostly = 50;
 static unsigned int ksm_unmatched_random_distribution __read_mostly = 50;
+
+/*
+ * This enables or disables the young bit driven working set
+ * estimation. The young bit working set estimation can reduce the
+ * interference of KSM on currently running code. It also can prevent
+ * THP splits on frequently used THP pages. It is more worthwhile to
+ * enable the working set estimation if randprotect is enabled
+ * (i.e. if ksm_unmatched_random_distribution is > 0).
+ */
+static bool ksm_wse __read_mostly;
 
 #ifdef CONFIG_NUMA
 /* Zeroed when merging across nodes is not allowed */
@@ -1215,6 +1226,7 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
 	if (addr == -EFAULT)
 		goto out;
 
+	/* FIXME: convert to page_vma_mapped_walk */
 	pmd = mm_find_pmd(mm, addr);
 	if (!pmd)
 		goto out;
@@ -2168,9 +2180,15 @@ static void cmp_and_merge_page(struct page *page, struct rmap_item *rmap_item)
 	unsigned int checksum;
 	int err;
 	bool max_page_sharing_bypass = false;
+	bool compute_checksum, use_zero_pages, wse;
+
+	wse = READ_ONCE(ksm_wse);
+	use_zero_pages = READ_ONCE(ksm_use_zero_pages);
+	compute_checksum = !wse || use_zero_pages;
 
 	stable_node = page_stable_node(page);
-	checksum = calc_checksum(page);
+	if (compute_checksum)
+		checksum = calc_checksum(page);
 	if (stable_node) {
 		if (stable_node->head != &migrate_nodes &&
 		    get_kpfn_nid(READ_ONCE(stable_node->kpfn)) !=
@@ -2194,7 +2212,7 @@ static void cmp_and_merge_page(struct page *page, struct rmap_item *rmap_item)
 		 * time we calculated it, this page is changing frequently:
 		 * therefore we don't want to write protect it.
 		 */
-		if (rmap_item->oldchecksum != checksum) {
+		if (!wse && rmap_item->oldchecksum != checksum) {
 			rmap_item->oldchecksum = checksum;
 			remove_rmap_item_from_tree(rmap_item);
 			return;
@@ -2239,7 +2257,7 @@ static void cmp_and_merge_page(struct page *page, struct rmap_item *rmap_item)
 	 * Same checksum as an empty page. We attempt to merge it with the
 	 * appropriate zero page if the user enabled this via sysfs.
 	 */
-	if (ksm_use_zero_pages && (checksum == zero_checksum)) {
+	if (use_zero_pages && (checksum == zero_checksum)) {
 		struct vm_area_struct *vma;
 
 		mmap_read_lock(mm);
@@ -2360,6 +2378,75 @@ static struct rmap_item *get_next_rmap_item(struct mm_slot *mm_slot,
 	return rmap_item;
 }
 
+static bool __ksm_test_and_clear_young(struct vm_area_struct *vma,
+				       struct page *page)
+{
+	unsigned long addr;
+	spinlock_t *ptl;
+	pmd_t *pmd, pmdval;
+	pte_t *ptep;
+	bool young = true;
+
+	addr = page_address_in_vma(page, vma);
+	if (unlikely(addr == -EFAULT))
+		goto out;
+
+	pmd = __mm_find_pmd(vma->vm_mm, addr);
+	if (unlikely(!pmd))
+		goto out;
+
+	/* requires an atomic read, same as mm_find_pmd() */
+	pmdval = READ_ONCE(*pmd);
+	if (unlikely(!pmd_present(pmdval)))
+		goto out;
+
+	if (pmd_trans_huge(pmdval)) {
+		young = pmd_young(pmdval);
+	} else {
+		VM_WARN_ON(pmd_trans_unstable(pmd));
+		ptep = pte_offset_map(pmd, addr);
+		young = pte_young(*ptep);
+		pte_unmap(ptep);
+	}
+	if (!young)
+		goto out;
+
+	/* need to clear the young bit */
+	ptl = pmd_trans_huge_lock(pmd, vma);
+	if (ptl) {
+		young = pmdp_clear_flush_young_notify(vma,
+						      addr & HPAGE_PMD_MASK,
+						      pmd);
+		spin_unlock(ptl);
+		if (young)
+			ksm_scan.thp_skip_young = true;
+	} else {
+		VM_WARN_ON(pmd_trans_unstable(pmd));
+		ptep = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
+		young = ptep_clear_flush_young_notify(vma, addr, ptep);
+		pte_unmap_unlock(ptep, ptl);
+	}
+	if (young)
+		SetPageReferenced(page);
+out:
+	return young;
+}
+
+static __always_inline bool ksm_test_and_clear_young(struct vm_area_struct *vma,
+						     struct page *page)
+{
+	return ksm_wse && __ksm_test_and_clear_young(vma, page);
+}
+
+static void ksm_scan_address_thp_skip_young(void)
+{
+	ksm_scan.address += PAGE_SIZE;
+	if (ksm_scan.thp_skip_young) {
+		ksm_scan.thp_skip_young = false;
+		ksm_scan.address = ALIGN(ksm_scan.address, HPAGE_PMD_SIZE);
+	}
+}
+
 static struct rmap_item *scan_get_next_rmap_item(struct page **page)
 {
 	struct mm_struct *mm;
@@ -2448,6 +2535,13 @@ next_mm:
 				continue;
 			}
 			if (PageAnon(*page)) {
+				if (ksm_test_and_clear_young(vma, *page) &&
+				    !PageKsm(*page)) {
+					put_page(*page);
+					ksm_scan_address_thp_skip_young();
+					cond_resched();
+					continue;
+				}
 				flush_anon_page(vma, *page, ksm_scan.address);
 				flush_dcache_page(*page);
 				rmap_item = get_next_rmap_item(slot,
@@ -3234,6 +3328,35 @@ static ssize_t unmatched_random_distribution_store(struct kobject *kobj,
 KSM_ATTR(matched_random_distribution);
 KSM_ATTR(unmatched_random_distribution);
 
+static ssize_t wse_show(struct kobject *kobj, struct kobj_attribute *attr,
+			char *buf)
+{
+	return sysfs_emit(buf, "%u\n", ksm_wse);
+}
+static ssize_t wse_store(struct kobject *kobj, struct kobj_attribute *attr,
+			 const char *buf, size_t count)
+{
+	int err;
+	unsigned char value;
+
+	err = kstrtou8(buf, 0, &value);
+	if (err)
+		return -EINVAL;
+
+	switch (value) {
+	case 0:
+	case 1:
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	WRITE_ONCE(ksm_wse, value);
+
+	return count;
+}
+KSM_ATTR(wse);
+
 static ssize_t max_page_sharing_show(struct kobject *kobj,
 				     struct kobj_attribute *attr, char *buf)
 {
@@ -3379,6 +3502,7 @@ static struct attribute *ksm_attrs[] = {
 	&use_zero_pages_attr.attr,
 	&matched_random_distribution_attr.attr,
 	&unmatched_random_distribution_attr.attr,
+	&wse_attr.attr,
 	NULL,
 };
 
