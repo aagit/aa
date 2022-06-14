@@ -113,6 +113,7 @@ extern void putback_lru_page(struct page *page);
 /*
  * in mm/rmap.c:
  */
+extern pmd_t *__mm_find_pmd(struct mm_struct *mm, unsigned long address);
 extern pmd_t *mm_find_pmd(struct mm_struct *mm, unsigned long address);
 
 /*
