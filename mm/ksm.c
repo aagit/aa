@@ -147,6 +147,7 @@ struct ksm_scan {
 	struct rmap_item **rmap_list;
 	unsigned long seqnr;
 	struct random_batch random_batch;
+	bool thp_skip_young;
 };
 
 /**
@@ -326,6 +327,16 @@ static bool ksm_use_zero_pages __read_mostly;
  */
 static unsigned int ksm_matched_random_distribution __read_mostly = 50;
 static unsigned int ksm_unmatched_random_distribution __read_mostly = 50;
+
+/*
+ * This enables or disables the young bit driven working set
+ * estimation. The young bit working set estimation can reduce the
+ * interference of KSM on currently running code. It also can prevent
+ * THP splits on frequently used THP pages. It is more worthwhile to
+ * keep the working set estimation enabled if randprotect is enabled
+ * (i.e. if ksm_unmatched_random_distribution is > 0).
+ */
+static bool ksm_wse __read_mostly = true;
 
 #ifdef CONFIG_NUMA
 /* Zeroed when merging across nodes is not allowed */
@@ -2360,6 +2371,76 @@ static struct rmap_item *get_next_rmap_item(struct mm_slot *mm_slot,
 	return rmap_item;
 }
 
+static bool __ksm_test_and_clear_young(struct vm_area_struct *vma,
+				       struct page *page)
+{
+	unsigned long addr;
+	spinlock_t *ptl;
+	pmd_t *pmd, pmdval;
+	pte_t *ptep;
+	bool young = true;
+
+	page = compound_head(page);
+	addr = page_address_in_vma(page, vma);
+	if (unlikely(addr == -EFAULT))
+		goto out;
+	VM_WARN_ON(PageTransHuge(page) && addr & ~HPAGE_PMD_MASK);
+
+	pmd = __mm_find_pmd(vma->vm_mm, addr);
+	if (unlikely(!pmd))
+		goto out;
+
+	/* requires an atomic read, same as mm_find_pmd() */
+	pmdval = READ_ONCE(*pmd);
+	if (unlikely(!pmd_present(pmdval)))
+		goto out;
+
+	if (pmd_trans_huge(pmdval)) {
+		young = pmd_young(pmdval);
+	} else {
+		VM_WARN_ON(pmd_trans_unstable(pmd));
+		ptep = pte_offset_map(pmd, addr);
+		young = pte_young(*ptep);
+		pte_unmap(ptep);
+	}
+	if (!young)
+		goto out;
+
+	/* need to clear the young bit */
+	ptl = pmd_trans_huge_lock(pmd, vma);
+	if (ptl) {
+		young = pmdp_clear_flush_young_notify(vma, addr, pmd);
+		spin_unlock(ptl);
+	} else {
+		VM_WARN_ON(pmd_trans_unstable(pmd));
+		ptep = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
+		young = ptep_clear_flush_young_notify(vma, addr, ptep);
+		pte_unmap_unlock(ptep, ptl);
+	}
+	if (young) {
+		SetPageReferenced(page);
+		if (PageTransHuge(page))
+			ksm_scan.thp_skip_young = true;
+	}
+out:
+	return young;
+}
+
+static __always_inline bool ksm_test_and_clear_young(struct vm_area_struct *vma,
+						     struct page *page)
+{
+	return ksm_wse && __ksm_test_and_clear_young(vma, page);
+}
+
+static void ksm_scan_address_thp_skip_young(void)
+{
+	ksm_scan.address += PAGE_SIZE;
+	if (ksm_scan.thp_skip_young) {
+		ksm_scan.thp_skip_young = false;
+		ksm_scan.address = ALIGN(ksm_scan.address, HPAGE_PMD_SIZE);
+	}
+}
+
 static struct rmap_item *scan_get_next_rmap_item(struct page **page)
 {
 	struct mm_struct *mm;
@@ -2448,6 +2529,12 @@ next_mm:
 				continue;
 			}
 			if (PageAnon(*page)) {
+				if (ksm_test_and_clear_young(vma, *page)) {
+					put_page(*page);
+					ksm_scan_address_thp_skip_young();
+					cond_resched();
+					continue;
+				}
 				flush_anon_page(vma, *page, ksm_scan.address);
 				flush_dcache_page(*page);
 				rmap_item = get_next_rmap_item(slot,
@@ -3234,6 +3321,35 @@ static ssize_t unmatched_random_distribution_store(struct kobject *kobj,
 KSM_ATTR(matched_random_distribution);
 KSM_ATTR(unmatched_random_distribution);
 
+static ssize_t wse_show(struct kobject *kobj, struct kobj_attribute *attr,
+			char *buf)
+{
+	return sysfs_emit(buf, "%u\n", ksm_wse);
+}
+static ssize_t wse_store(struct kobject *kobj, struct kobj_attribute *attr,
+			 const char *buf, size_t count)
+{
+	int err;
+	unsigned char value;
+
+	err = kstrtou8(buf, 0, &value);
+	if (err)
+		return -EINVAL;
+
+	switch (value) {
+	case 0:
+	case 1:
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	WRITE_ONCE(ksm_wse, value);
+
+	return count;
+}
+KSM_ATTR(wse);
+
 static ssize_t max_page_sharing_show(struct kobject *kobj,
 				     struct kobj_attribute *attr, char *buf)
 {
@@ -3379,6 +3495,7 @@ static struct attribute *ksm_attrs[] = {
 	&use_zero_pages_attr.attr,
 	&matched_random_distribution_attr.attr,
 	&unmatched_random_distribution_attr.attr,
+	&wse_attr.attr,
 	NULL,
 };
 
