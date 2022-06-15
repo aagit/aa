@@ -42,6 +42,11 @@ struct mmu_interval_notifier;
  * @MMU_NOTIFY_MIGRATE: used during migrate_vma_collect() invalidate to signal
  * a device driver to possibly ignore the invalidation if the
  * migrate_pgmap_owner field matches the driver's device private pgmap owner.
+ *
+ * @MMU_NOTIFY_CHANGE_PTE: every single pgtable change will be
+ * reflected by a mmu_notifier_change_pte() so if the change_pte()
+ * method is implemented by the driver there's no need to invalidate
+ * the secondary MMU in invalidate_range_start().
  */
 enum mmu_notifier_event {
 	MMU_NOTIFY_UNMAP = 0,
@@ -51,6 +56,7 @@ enum mmu_notifier_event {
 	MMU_NOTIFY_SOFT_DIRTY,
 	MMU_NOTIFY_RELEASE,
 	MMU_NOTIFY_MIGRATE,
+	MMU_NOTIFY_CHANGE_PTE,
 };
 
 #define MMU_NOTIFIER_RANGE_BLOCKABLE (1 << 0)
