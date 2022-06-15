@@ -47,6 +47,11 @@ struct mmu_interval_notifier;
  * longer have exclusive access to the page. When sent during creation of an
  * exclusive range the owner will be initialised to the value provided by the
  * caller of make_device_exclusive_range(), otherwise the owner will be NULL.
+ *
+ * @MMU_NOTIFY_CHANGE_PTE: every single pgtable change will be
+ * reflected by a mmu_notifier_change_pte() so if the change_pte()
+ * method is implemented by the driver there's no need to invalidate
+ * the secondary MMU in invalidate_range_start().
  */
 enum mmu_notifier_event {
 	MMU_NOTIFY_UNMAP = 0,
@@ -57,6 +62,7 @@ enum mmu_notifier_event {
 	MMU_NOTIFY_RELEASE,
 	MMU_NOTIFY_MIGRATE,
 	MMU_NOTIFY_EXCLUSIVE,
+	MMU_NOTIFY_CHANGE_PTE,
 };
 
 #define MMU_NOTIFIER_RANGE_BLOCKABLE (1 << 0)
