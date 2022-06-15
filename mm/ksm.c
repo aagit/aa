@@ -1111,7 +1111,7 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 	if (page_mapcount(page) + 1 + PageSwapCache(page) != page_count(page))
 		goto out;
 
-	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, vma, mm,
+	mmu_notifier_range_init(&range, MMU_NOTIFY_CHANGE_PTE, 0, vma, mm,
 				pvmw.address,
 				pvmw.address + PAGE_SIZE);
 	mmu_notifier_invalidate_range_start(&range);
@@ -1212,8 +1212,8 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
 	if (!pmd)
 		goto out;
 
-	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, vma, mm, addr,
-				addr + PAGE_SIZE);
+	mmu_notifier_range_init(&range, MMU_NOTIFY_CHANGE_PTE,
+				0, vma, mm, addr, addr + PAGE_SIZE);
 	mmu_notifier_invalidate_range_start(&range);
 
 	ptep = pte_offset_map_lock(mm, pmd, addr, &ptl);
