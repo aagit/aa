@@ -432,7 +432,8 @@ static void __handle_changed_spte(struct kvm *kvm, int as_id, gfn_t gfn,
 	 * changed, or the SPTE should be zeroed, and the TLBs flushed by the
 	 * thread before replacement.
 	 */
-	if (was_leaf && is_leaf && pfn_changed) {
+	if (was_leaf && is_leaf && pfn_changed &&
+	    (is_writable_pte(old_spte) || is_writable_pte(new_spte))) {
 		pr_err("Invalid SPTE change: cannot replace a present leaf\n"
 		       "SPTE with another present leaf SPTE mapping a\n"
 		       "different PFN!\n"
