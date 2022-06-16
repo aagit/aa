@@ -1191,19 +1191,25 @@ static bool set_spte_gfn(struct kvm *kvm, struct tdp_iter *iter,
 	    !is_shadow_present_pte(iter->old_spte))
 		return false;
 
-	/*
-	 * Note, when changing a read-only SPTE, it's not strictly necessary to
-	 * zero the SPTE before setting the new PFN, but doing so preserves the
-	 * invariant that the PFN of a present * leaf SPTE can never change.
-	 * See __handle_changed_spte().
-	 */
-	tdp_mmu_set_spte(kvm, iter, 0);
-
 	if (!pte_write(range->pte)) {
 		new_spte = kvm_mmu_changed_pte_notifier_make_spte(iter->old_spte,
 								  pte_pfn(range->pte));
 
 		tdp_mmu_set_spte(kvm, iter, new_spte);
+	} else {
+		/*
+		 * Before we are allowed to switch the primary MMU
+		 * pgtable from wrprotected to writable, we would have
+		 * had to flush and prevent the secondary MMU from
+		 * taking extra references on the page. So there must
+		 * not have been a spte here, or it means there'
+		 * there's a MMU notifier bug.
+		 */
+		WARN_ON_ONCE(1);
+
+		/* zero out just in case */
+		tdp_mmu_set_spte(kvm, iter, 0);
+
 	}
 
 	return true;
