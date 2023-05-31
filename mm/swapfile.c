@@ -1694,6 +1694,33 @@ bool can_read_pin_swap_page(struct page *page)
 {
 	VM_BUG_ON_PAGE(!PageLocked(page), page);
 	VM_BUG_ON_PAGE(PageKsm(page), page);
+	/*
+	 * SWP_STABLE_WRITE might prevent page reuse later. So if we
+	 * don't unshare the page under stable write swapout I/O,
+	 * before taking the PIN, the R/O (!FOLL_WRITE) GUP pin we are
+	 * taking now, may be broken later in do_wp_page at the first
+	 * write access. In other words by unsharing the page here, we
+	 * clear PageWriteback before any GUP pin can be taken.
+	 *
+	 * This check relies on the vmscan.c is_page_cache_freeable()
+	 * check which guarantees us, if the page is under writeback,
+	 * it had to be unmapped from all ptes and not be pinned
+	 * first. And if it's still under writeback then this is the
+	 * first GUP pin being taken on it or it already would have
+	 * been unshared and in turn the PageWriteback would have been
+	 * cleared.
+	 *
+	 * KSM pages can be pinned even under writeback because they
+	 * would never be reused by the COW fault, unless
+	 * PageSwapCache is cleared first, so gup_must_unshare must
+	 * already cope with that regardless of SWP_STABLE_WRITE set
+	 * or not. If instead PageSwapCache has been cleared and the
+	 * page can be reused by the COW fault, then it'd imply
+	 * PageWriteback is gone as well and there would be no extra
+	 * COW caused by SWP_STABLE_WRITE either.
+	 */
+	if (PageWriteback(page))
+		return false;
 	return page_trans_huge_map_swapcount(page, NULL, NULL) <= 1;
 }
 
