@@ -2539,14 +2539,48 @@ static int gup_pte_range(pmd_t pmd, pmd_t *pmdp, unsigned long addr,
 			goto pte_unmap;
 		}
 
-		if (unlikely(pmd_val(pmd) != pmd_val(*pmdp)) ||
-		    unlikely(pte_val(pte) != pte_val(*ptep))) {
+		if (!pte_write(pte) &&
+		    gup_must_unshare_irqsafe(flags, page, false)) {
 			put_compound_head(head, 1, flags);
 			goto pte_unmap;
 		}
 
-		if (!pte_write(pte) &&
-		    gup_must_unshare_irqsafe(flags, page, false)) {
+		/*
+		 * We need to serialize gup-fast against the COR fault
+		 * can_read_pin_swap_page() check happening after
+		 * ptep_clear_flush_notify().
+		 *
+		 * We don't care if mapcount is being elevated from
+		 * under us because fork() concurrently with short
+		 * term GUP pins is racy by design at sub-PAGE_SIZE
+		 * granularity. So we only care about to serialize
+		 * against mapcount or swapcount being decreased from
+		 * under us (i.e. the anon page becoming exclusive
+		 * from under us).
+		 *
+		 * If the page becomes exclusive before the above
+		 * gup_must_unshare_irqsafe() has run, then we're
+		 * guaranteed the COR fault will also see
+		 * PageAnonExclusive true (if the COR fault didn't run
+		 * ptep_clear_flush_notify() yet) or alternatively the
+		 * below "pte same" check wouldn't pass because the
+		 * pte would either be zero or it'd point to the new
+		 * page copy.
+		 *
+		 * If instead the page becomes exclusive after the
+		 * above has already run also no problem because
+		 * GUP-fast will abort, and it doesn't matter what the
+		 * COR fault does in that case.
+		 *
+		 * Just this smp_rmb() is needed because both the
+		 * gup_must_unshare_irqsafe() fast path and the below
+		 * "pte same" check are lockless and could be
+		 * reordered by both compiler and CPU.
+		 */
+		smp_rmb();
+
+		if (unlikely(pmd_val(pmd) != pmd_val(*pmdp)) ||
+		    unlikely(pte_val(pte) != pte_val(*ptep))) {
 			put_compound_head(head, 1, flags);
 			goto pte_unmap;
 		}
@@ -2793,13 +2827,16 @@ static int gup_huge_pmd(pmd_t orig, pmd_t *pmdp, unsigned long addr,
 	if (!head)
 		return 0;
 
-	if (unlikely(pmd_val(orig) != pmd_val(*pmdp))) {
+	if (!pmd_write(orig) &&
+	    gup_must_unshare_irqsafe(flags, head, true)) {
 		put_compound_head(head, refs, flags);
 		return 0;
 	}
 
-	if (!pmd_write(orig) &&
-	    gup_must_unshare_irqsafe(flags, head, true)) {
+	/* see the comment before smp_rmb() in gup_pte_range() */
+	smp_rmb();
+
+	if (unlikely(pmd_val(orig) != pmd_val(*pmdp))) {
 		put_compound_head(head, refs, flags);
 		return 0;
 	}
