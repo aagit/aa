@@ -3003,7 +3003,8 @@ static inline void wp_page_reuse(struct vm_fault *vmf)
  *   held to the old page, as well as updating the rmap.
  * - In any case, unlock the PTL and drop the reference we took to the old page.
  */
-static vm_fault_t __wp_page_copy(struct vm_fault *vmf, bool unshare)
+static __always_inline vm_fault_t __wp_page_copy(struct vm_fault *vmf,
+						 bool unshare)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	struct mm_struct *mm = vma->vm_mm;
@@ -3013,6 +3014,7 @@ static vm_fault_t __wp_page_copy(struct vm_fault *vmf, bool unshare)
 	int page_copied = 0;
 	struct mmu_notifier_range range;
 	int ret;
+	bool lock_old_page = unlikely(unshare) && old_page;
 
 	if (unlikely(anon_vma_prepare(vma)))
 		goto oom;
@@ -3056,11 +3058,30 @@ static vm_fault_t __wp_page_copy(struct vm_fault *vmf, bool unshare)
 				(vmf->address & PAGE_MASK) + PAGE_SIZE);
 	mmu_notifier_invalidate_range_start(&range);
 
+	if (lock_old_page)
+		lock_page(old_page);
 	/*
 	 * Re-check the pte - we dropped the lock
 	 */
 	vmf->pte = pte_offset_map_lock(mm, vmf->pmd, vmf->address, &vmf->ptl);
 	if (likely(pte_same(*vmf->pte, vmf->orig_pte))) {
+		if (unlikely(lock_old_page)) {
+			ptep_clear_flush_notify(vma, vmf->address, vmf->pte);
+			/*
+			 * Here GUP fast is stopped and no more GUP
+			 * FOLL_LONGTERM R/O pins can be taken
+			 * concurrently from under us. So double check
+			 * if the page still need unsharing, if not a
+			 * GUP R/O pin may already have been taken so
+			 * go back to GUP and try again.
+			 */
+			if (can_read_pin_swap_page(vmf->page)) {
+				set_pte_at_notify(mm, vmf->address, vmf->pte,
+						  vmf->orig_pte);
+				goto unlock_old_page;
+			}
+		}
+
 		if (old_page) {
 			if (!PageAnon(old_page)) {
 				dec_mm_counter_fast(mm,
@@ -3083,14 +3104,18 @@ static vm_fault_t __wp_page_copy(struct vm_fault *vmf, bool unshare)
 				entry = pte_mkuffd_wp(entry);
 		}
 
-		/*
-		 * Clear the pte entry and flush it first, before updating the
-		 * pte with the new entry, to keep TLBs on different CPUs in
-		 * sync. This code used to set the new PTE then flush TLBs, but
-		 * that left a window where the new PTE could be loaded into
-		 * some TLBs while the old PTE remains in others.
-		 */
-		ptep_clear_flush_notify(vma, vmf->address, vmf->pte);
+		if (likely(!lock_old_page)) {
+			/*
+			 * Clear the pte entry and flush it first,
+			 * before updating the pte with the new entry,
+			 * to keep TLBs on different CPUs in
+			 * sync. This code used to set the new PTE
+			 * then flush TLBs, but that left a window
+			 * where the new PTE could be loaded into some
+			 * TLBs while the old PTE remains in others.
+			 */
+			ptep_clear_flush_notify(vma, vmf->address, vmf->pte);
+		}
 		page_add_new_anon_rmap(new_page, vma, vmf->address, false);
 		lru_cache_add_inactive_or_unevictable(new_page, vma);
 		/*
@@ -3124,12 +3149,17 @@ static vm_fault_t __wp_page_copy(struct vm_fault *vmf, bool unshare)
 			 * old page will be flushed before it can be reused.
 			 */
 			page_remove_rmap(old_page, false);
+			if (lock_old_page)
+				unlock_page(old_page);
 		}
 
 		/* Free the old page.. */
 		new_page = old_page;
 		page_copied = 1;
 	} else {
+		if (lock_old_page)
+		unlock_old_page:
+			unlock_page(old_page);
 		update_mmu_tlb(vma, vmf->address, vmf->pte);
 	}
 
