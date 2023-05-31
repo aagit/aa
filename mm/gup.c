@@ -146,6 +146,9 @@ static __always_inline bool __gup_must_unshare(unsigned int flags,
 			(irq_safe || !(vma->vm_flags & VM_SHARED));
 	if (PageKsm(page))
 		return gup_must_unshare_ksm(flags);
+	/* see the SWP_STABLE_WRITE comment in can_read_pin_swap_page */
+	if (PageWriteback(page))
+		return true;
 	if (PageHuge(page)) {
 		if (__page_mapcount(page) > 1)
 			return true;
