@@ -2706,6 +2706,11 @@ bool reuse_ksm_page(struct page *page,
 	}
 #endif
 
+	/*
+	 * We cannot reuse PageSwapCache also because it may be in
+	 * PageWriteback mode, so it would break SWP_STABLE_WRITE if
+	 * we did.
+	 */
 	if (PageSwapCache(page) || !page_stable_node(page))
 		return false;
 	/* Prohibit parallel get_ksm_page() */
