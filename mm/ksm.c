@@ -1092,7 +1092,7 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 		 *
 		 * PageSwapCache() is stable too under page lock.
 		 */
-		if (can_read_pin_swap_page(page) &&
+		if (can_read_pin_swap_page_no_thp(page) &&
 		    2 + PageSwapCache(page) != page_count(page)) {
 			set_pte_at(mm, pvmw.address, pvmw.pte, entry);
 			goto out_unlock;
@@ -1199,7 +1199,7 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
 	 *
 	 * PageSwapCache() is stable too under page lock.
 	 */
-	if (can_read_pin_swap_page(page) &&
+	if (can_read_pin_swap_page_no_thp(page) &&
 	    2 + PageSwapCache(page) != page_count(page)) {
 		set_pte_at(mm, addr, ptep, oldpte);
 		pte_unmap_unlock(ptep, ptl);

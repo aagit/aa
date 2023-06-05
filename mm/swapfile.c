@@ -1603,7 +1603,8 @@ static bool page_swapped(struct page *page)
 	return false;
 }
 
-static int page_trans_huge_map_swapcount(struct page *page, int *total_mapcount,
+static int page_trans_huge_map_swapcount(struct page *page, int thp_idx,
+					 int *total_mapcount,
 					 int *total_swapcount)
 {
 	int i, map_swapcount, _total_mapcount, _total_swapcount;
@@ -1618,13 +1619,16 @@ static int page_trans_huge_map_swapcount(struct page *page, int *total_mapcount,
 	VM_BUG_ON_PAGE(PageHuge(page), page);
 
 	if (!IS_ENABLED(CONFIG_THP_SWAP) || likely(!PageTransCompound(page))) {
-		mapcount = page_trans_huge_mapcount(page, total_mapcount);
+		mapcount = page_trans_huge_mapcount(page, thp_idx,
+						    total_mapcount);
 		if (PageSwapCache(page))
 			swapcount = page_swapcount(page);
 		if (total_swapcount)
 			*total_swapcount = swapcount;
 		return mapcount + swapcount;
 	}
+
+	WARN_ON_ONCE(thp_idx == REUSE_SWAP_PAGE_NO_THP);
 
 	page = compound_head(page);
 
@@ -1652,7 +1656,9 @@ again:
 			swapcount = swap_count(map[offset + i]);
 			_total_swapcount += swapcount;
 		}
-		map_swapcount = max(map_swapcount, mapcount + swapcount);
+		if (thp_idx < 0 || i == thp_idx)
+			map_swapcount = max(map_swapcount,
+					    mapcount + swapcount);
 	}
 	if (PageDoubleMap(page)) {
 		map_swapcount -= 1;
@@ -1690,7 +1696,7 @@ again:
  *
  * The caller has to check PageKsm before calling this.
  */
-bool can_read_pin_swap_page(struct page *page)
+bool can_read_pin_swap_page(struct page *page, int thp_idx)
 {
 	VM_BUG_ON_PAGE(!PageLocked(page), page);
 	VM_BUG_ON_PAGE(PageKsm(page), page);
@@ -1721,7 +1727,7 @@ bool can_read_pin_swap_page(struct page *page)
 	 */
 	if (PageWriteback(page))
 		return false;
-	return page_trans_huge_map_swapcount(page, NULL, NULL) <= 1;
+	return page_trans_huge_map_swapcount(page, thp_idx, NULL, NULL) <= 1;
 }
 
 /*
@@ -1733,15 +1739,19 @@ bool can_read_pin_swap_page(struct page *page)
  * NOTE: total_map_swapcount should not be relied upon by the caller if
  * reuse_swap_page() returns false, but it may be always overwritten
  * (see the other implementation for CONFIG_SWAP=n).
+ *
+ * If thp_idx is negative check if the whole THP can be reused,
+ * otherwise check only the provided subpage index.
  */
-bool reuse_swap_page(struct page *page, int *total_map_swapcount)
+bool reuse_swap_page(struct page *page, int thp_idx,
+		     int *total_map_swapcount)
 {
 	int count, total_mapcount, total_swapcount;
 
 	VM_BUG_ON_PAGE(!PageLocked(page), page);
 	if (unlikely(PageKsm(page)))
 		return false;
-	count = page_trans_huge_map_swapcount(page, &total_mapcount,
+	count = page_trans_huge_map_swapcount(page, thp_idx, &total_mapcount,
 					      &total_swapcount);
 	if (total_map_swapcount)
 		*total_map_swapcount = total_mapcount + total_swapcount;
