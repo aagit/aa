@@ -506,8 +506,8 @@ extern int __swp_swapcount(swp_entry_t entry);
 extern int swp_swapcount(swp_entry_t entry);
 extern struct swap_info_struct *page_swap_info(struct page *);
 extern struct swap_info_struct *swp_swap_info(swp_entry_t entry);
-extern bool can_read_pin_swap_page(struct page *);
-extern bool reuse_swap_page(struct page *, int *);
+extern bool can_read_pin_swap_page(struct page *, int);
+extern bool reuse_swap_page(struct page *, int, int *);
 extern int try_to_free_swap(struct page *);
 struct backing_dev_info;
 extern int init_swap_address_space(unsigned int type, unsigned long nr_pages);
@@ -669,16 +669,19 @@ static inline int swp_swapcount(swp_entry_t entry)
 	return 0;
 }
 
-static inline bool can_read_pin_swap_page(struct page *page)
+static inline bool can_read_pin_swap_page(struct page *page,
+					  unsigned long thp_idx)
 {
-	return page_trans_huge_mapcount(page, NULL) <= 1;
+	return page_trans_huge_mapcount(page, thp_idx, NULL) <= 1;
 }
 
-static inline bool reuse_swap_page(struct page *page, int *total_map_swapcount)
+static inline bool reuse_swap_page(struct page *page, int thp_idx,
+				   int *total_map_swapcount)
 {
 	if (unlikely(PageKsm(page)))
 		return false;
-	return page_trans_huge_mapcount(page, total_map_swapcount) <= 1;
+	return page_trans_huge_mapcount(page, thp_idx,
+					total_map_swapcount) <= 1;
 }
 
 static inline int try_to_free_swap(struct page *page)
@@ -694,6 +697,28 @@ static inline swp_entry_t get_swap_page(struct page *page)
 }
 
 #endif /* CONFIG_SWAP */
+
+#define REUSE_SWAP_PAGE_WHOLE_THP -1
+#define REUSE_SWAP_PAGE_NO_THP -2
+
+static inline bool can_read_pin_swap_page_no_thp(struct page * page) {
+	return can_read_pin_swap_page(page, REUSE_SWAP_PAGE_NO_THP);
+}
+static inline bool can_read_pin_swap_page_addr(struct page * page,
+					       unsigned long addr) {
+	return can_read_pin_swap_page(page, page_trans_huge_subpage_idx(addr));
+}
+static inline bool reuse_swap_page_whole_thp(struct page * page,
+					     int *total_map_swapcount) {
+	return reuse_swap_page(page, REUSE_SWAP_PAGE_WHOLE_THP,
+			       total_map_swapcount);
+}
+static inline bool reuse_swap_page_addr(struct page * page,
+					unsigned long addr,
+					int *total_map_swapcount) {
+	return reuse_swap_page(page, page_trans_huge_subpage_idx(addr),
+			       total_map_swapcount);
+}
 
 #ifdef CONFIG_THP_SWAP
 extern int split_swap_cluster(swp_entry_t entry);
