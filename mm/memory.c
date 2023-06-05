@@ -3062,7 +3062,8 @@ static __always_inline vm_fault_t __wp_page_copy(struct vm_fault *vmf,
 			 * GUP R/O pin may already have been taken so
 			 * go back to GUP and try again.
 			 */
-			if (can_read_pin_swap_page(vmf->page)) {
+			if (can_read_pin_swap_page_addr(vmf->page,
+							vmf->address)) {
 				set_pte_at_notify(mm, vmf->address, vmf->pte,
 						  vmf->orig_pte);
 				goto unlock_old_page;
@@ -3341,7 +3342,8 @@ static vm_fault_t wp_page_unshare(struct vm_fault *vmf)
 			unlock_page(vmf->page);
 			goto out_unlock;
 		}
-		must_unshare = !can_read_pin_swap_page(vmf->page);
+		must_unshare = !can_read_pin_swap_page_addr(vmf->page,
+							    vmf->address);
 		unlock_page(vmf->page);
 		if (must_unshare)
 			return __wp_page_unshare(vmf);
@@ -3545,7 +3547,8 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 			wp_page_reuse(vmf);
 			return VM_FAULT_WRITE;
 		}
-		if (reuse_swap_page(vmf->page, &total_map_swapcount)) {
+		if (reuse_swap_page_addr(vmf->page, vmf->address,
+					 &total_map_swapcount)) {
 			if (total_map_swapcount == 1) {
 				/*
 				 * The page is all ours. Move it to
@@ -3910,7 +3913,8 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
 	dec_mm_counter_fast(vma->vm_mm, MM_SWAPENTS);
 	pte = mk_pte(page, vma->vm_page_prot);
-	if ((vmf->flags & FAULT_FLAG_WRITE) && reuse_swap_page(page, NULL)) {
+	if ((vmf->flags & FAULT_FLAG_WRITE) &&
+	    reuse_swap_page_addr(page, vmf->address, NULL)) {
 		pte = maybe_mkwrite(pte_mkdirty(pte), vma);
 		vmf->flags &= ~FAULT_FLAG_WRITE;
 		ret |= VM_FAULT_WRITE;

@@ -392,6 +392,11 @@ static inline void page_trans_huge_mapcount_unlock(struct page *page)
 	bit_spin_unlock(PG_locked, &page[1].flags);
 }
 
+static inline int page_trans_huge_subpage_idx(unsigned long address)
+{
+	return (address & ~HPAGE_PMD_MASK) >> PAGE_SHIFT;
+}
+
 #else /* CONFIG_TRANSPARENT_HUGEPAGE */
 #define HPAGE_PMD_SHIFT ({ BUILD_BUG(); 0; })
 #define HPAGE_PMD_MASK ({ BUILD_BUG(); 0; })
@@ -565,6 +570,11 @@ static inline void page_trans_huge_mapcount_lock(struct page *page)
 
 static inline void page_trans_huge_mapcount_unlock(struct page *page)
 {
+}
+
+static inline int page_trans_huge_subpage_idx(unsigned long address)
+{
+	return 0;
 }
 
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
