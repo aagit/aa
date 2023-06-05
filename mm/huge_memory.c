@@ -1363,7 +1363,7 @@ vm_fault_t do_huge_pmd_wp_page(struct vm_fault *vmf)
 	 * We can only reuse the page if nobody else maps the huge page or it's
 	 * part.
 	 */
-	if (reuse_swap_page(page, NULL)) {
+	if (reuse_swap_page_whole_thp(page, NULL)) {
 		pmd_t entry;
 		entry = pmd_mkyoung(orig_pmd);
 		entry = maybe_pmd_mkwrite(pmd_mkdirty(entry), vma);
@@ -1418,7 +1418,7 @@ struct page *follow_trans_huge_pmd(struct vm_area_struct *vma,
 
 	/* see comments of the gup_must_unshare() callers in mm/gup.c */
 	if (!pmd_write(*pmd) &&
-	    gup_must_unshare(flags, page, true, vma))
+	    gup_must_unshare(flags, page, addr, true, vma))
 		return ERR_PTR(-EMLINK);
 
 	if (!try_grab_page(page, flags))
@@ -2583,7 +2583,8 @@ again:
  * need full accuracy to avoid breaking page pinning, because
  * page_trans_huge_mapcount() is slower than page_mapcount().
  */
-int page_trans_huge_mapcount(struct page *page, int *total_mapcount)
+int page_trans_huge_mapcount(struct page *page, int thp_idx,
+			     int *total_mapcount)
 {
 	int i, ret, _total_mapcount, mapcount;
 	unsigned int seqcount;
@@ -2592,11 +2593,14 @@ int page_trans_huge_mapcount(struct page *page, int *total_mapcount)
 	VM_BUG_ON_PAGE(PageHuge(page), page);
 
 	if (likely(!PageTransCompound(page))) {
+		WARN_ON_ONCE(thp_idx == REUSE_SWAP_PAGE_WHOLE_THP);
 		mapcount = atomic_read(&page->_mapcount) + 1;
 		if (total_mapcount)
 			*total_mapcount = mapcount;
 		return mapcount;
 	}
+
+	WARN_ON_ONCE(thp_idx == REUSE_SWAP_PAGE_NO_THP);
 
 	page = compound_head(page);
 
@@ -2605,7 +2609,8 @@ again:
 	_total_mapcount = ret = 0;
 	for (i = 0; i < thp_nr_pages(page); i++) {
 		mapcount = atomic_read(&page[i]._mapcount) + 1;
-		ret = max(ret, mapcount);
+		if (thp_idx < 0 || i == thp_idx)
+			ret = max(ret, mapcount);
 		_total_mapcount += mapcount;
 	}
 	if (PageDoubleMap(page)) {
