@@ -883,13 +883,14 @@ static inline int page_mapcount(struct page *page)
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 int total_mapcount(struct page *page);
-int page_trans_huge_mapcount(struct page *page, int *total_mapcount);
+int page_trans_huge_mapcount(struct page *page, int thp_idx,
+			     int *total_mapcount);
 #else
 static inline int total_mapcount(struct page *page)
 {
 	return page_mapcount(page);
 }
-static inline int page_trans_huge_mapcount(struct page *page,
+static inline int page_trans_huge_mapcount(struct page *page, int thp_idx,
 					   int *total_mapcount)
 {
 	int mapcount = page_mapcount(page);
@@ -2956,9 +2957,10 @@ static inline int vm_fault_to_errno(vm_fault_t vm_fault, int foll_flags)
 }
 
 extern bool gup_must_unshare(unsigned int flags, struct page *page,
-			     bool is_head, struct vm_area_struct *vma);
+			     unsigned long address, bool is_head,
+			     struct vm_area_struct *vma);
 extern bool gup_must_unshare_irqsafe(unsigned int flags, struct page *page,
-				     bool is_head);
+				     unsigned long address, bool is_head);
 
 typedef int (*pte_fn_t)(pte_t *pte, unsigned long addr, void *data);
 extern int apply_to_page_range(struct mm_struct *mm, unsigned long address,
