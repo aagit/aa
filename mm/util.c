@@ -789,6 +789,59 @@ struct anon_vma *page_anon_vma(struct page *page)
 	return __page_rmapping(page);
 }
 
+/*
+ * This should most likely only be called during fork() to see whether we
+ * should break the cow immediately for a page on the src mm.
+ */
+bool page_needs_cow_for_dma(struct vm_area_struct *vma, struct page *page)
+{
+	bool copy;
+	int val;
+
+	if (!is_cow_mapping(vma->vm_flags))
+		return false;
+
+	if (!test_bit(MMF_HAS_PINNED, &vma->vm_mm->flags))
+		return false;
+
+	if (!PageAnon(page))
+		return false;
+
+	/*
+	 * If page_count is == 1 there cannot be any GUP pin and
+	 * further GUP pins are prevented with write_protect_seq.
+	 */
+	val = page_count(page);
+	VM_WARN_ON_ONCE_PAGE(val < 1, page);
+	if (val == 1)
+		return false;
+
+	/*
+	 * If mapcount is > 1 at any given time there cannot be any
+	 * R/O GUP pin thanks to gup_must_unshare() and further GUP
+	 * pins are prevented with write_protect_seq.
+	 */
+	val = page_mapcount(page);
+	VM_WARN_ON_ONCE_PAGE(val < 1, page);
+	if (val > 1)
+		return false;
+
+	/*
+	 * COWing too much is unsafe since GUP pin exists, but copying
+	 * too much in fork is always safe as far as GUP pins are
+	 * concerned.
+	 */
+	copy = true;
+	if (PageSwapCache(page) && trylock_page(page)) {
+		val = page_count(page) - PageSwapCache(page);
+		VM_WARN_ON_ONCE_PAGE(val < 1, page);
+		copy = val != 1;
+		unlock_page(page);
+	}
+
+	return copy;
+}
+
 struct address_space *page_mapping(struct page *page)
 {
 	struct address_space *mapping;

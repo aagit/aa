@@ -1572,8 +1572,7 @@ static __always_inline long __get_user_pages_locked(struct mm_struct *mm,
 		BUG_ON(*locked != 1);
 	}
 
-	if (flags & FOLL_PIN)
-		mm_set_has_pinned_flag(&mm->flags);
+	mm_set_has_pinned_flag(&mm->flags);
 
 	/*
 	 * FOLL_PIN and FOLL_GET are mutually exclusive. Traditional behavior
@@ -3100,11 +3099,9 @@ static unsigned long lockless_pages_from_mm(unsigned long start,
 	    !gup_fast_permitted(start, end))
 		return 0;
 
-	if (gup_flags & FOLL_PIN) {
-		seq = raw_read_seqcount(&current->mm->write_protect_seq);
-		if (seq & 1)
-			return 0;
-	}
+	seq = raw_read_seqcount(&current->mm->write_protect_seq);
+	if (seq & 1)
+		return 0;
 
 	/*
 	 * Disable interrupts. The nested form is used, in order to allow full,
@@ -3125,11 +3122,9 @@ static unsigned long lockless_pages_from_mm(unsigned long start,
 	 * When pinning pages for DMA there could be a concurrent write protect
 	 * from fork() via copy_page_range(), in this case always fail fast GUP.
 	 */
-	if (gup_flags & FOLL_PIN) {
-		if (read_seqcount_retry(&current->mm->write_protect_seq, seq)) {
-			unpin_user_pages(pages, nr_pinned);
-			return 0;
-		}
+	if (read_seqcount_retry(&current->mm->write_protect_seq, seq)) {
+		unpin_user_pages(pages, nr_pinned);
+		return 0;
 	}
 	return nr_pinned;
 }
@@ -3148,8 +3143,7 @@ static int internal_get_user_pages_fast(unsigned long start,
 				       FOLL_FAST_ONLY | FOLL_NOFAULT)))
 		return -EINVAL;
 
-	if (gup_flags & FOLL_PIN)
-		mm_set_has_pinned_flag(&current->mm->flags);
+	mm_set_has_pinned_flag(&current->mm->flags);
 
 	if (!(gup_flags & FOLL_FAST_ONLY))
 		might_lock_read(&current->mm->mmap_lock);
