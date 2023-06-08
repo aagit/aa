@@ -504,11 +504,15 @@ static __always_inline int PageAnon(struct page *page)
 	return ((unsigned long)page->mapping & PAGE_MAPPING_ANON) != 0;
 }
 
-static __always_inline int PageAnonNoKsm(struct page *page)
+static __always_inline int PageHeadAnonNoKsm(struct page *page)
 {
-	page = compound_head(page);
 	return ((unsigned long)page->mapping & PAGE_MAPPING_FLAGS) ==
 		PAGE_MAPPING_ANON;
+}
+
+static __always_inline int PageAnonNoKsm(struct page *page)
+{
+	return PageHeadAnonNoKsm(compound_head(page));
 }
 
 static __always_inline int __PageMovable(struct page *page)
