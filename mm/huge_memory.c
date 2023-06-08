@@ -1019,7 +1019,7 @@ struct page *follow_devmap_pmd(struct vm_area_struct *vma, unsigned long addr,
 	if (!*pgmap)
 		return ERR_PTR(-EFAULT);
 	page = pfn_to_page(pfn);
-	if (!try_grab_page(page, flags))
+	if (!try_grab_page(page, addr, flags))
 		page = ERR_PTR(-ENOMEM);
 
 	return page;
@@ -1105,7 +1105,7 @@ int copy_huge_pmd(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	 * best effort that the pinned pages won't be replaced by another
 	 * random page during the coming copy-on-write.
 	 */
-	if (unlikely(page_needs_cow_for_dma(src_vma, src_page))) {
+	if (unlikely(page_needs_cow_for_dma(src_vma, src_page, true))) {
 		pte_free(dst_mm, pgtable);
 		spin_unlock(src_ptl);
 		spin_unlock(dst_ptl);
@@ -1186,7 +1186,7 @@ struct page *follow_devmap_pud(struct vm_area_struct *vma, unsigned long addr,
 	if (!*pgmap)
 		return ERR_PTR(-EFAULT);
 	page = pfn_to_page(pfn);
-	if (!try_grab_page(page, flags))
+	if (!try_grab_page(page, addr, flags))
 		page = ERR_PTR(-ENOMEM);
 
 	return page;
@@ -1219,7 +1219,7 @@ int copy_huge_pud(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	}
 
 	/* Please refer to comments in copy_huge_pmd() */
-	if (unlikely(page_needs_cow_for_dma(vma, pud_page(pud)))) {
+	if (unlikely(page_needs_cow_for_dma(vma, pud_page(pud), true))) {
 		spin_unlock(src_ptl);
 		spin_unlock(dst_ptl);
 		__split_huge_pud(vma, src_pud, addr);
@@ -1421,7 +1421,7 @@ struct page *follow_trans_huge_pmd(struct vm_area_struct *vma,
 	    gup_must_unshare(flags, page, addr, true, vma))
 		return ERR_PTR(-EMLINK);
 
-	if (!try_grab_page(page, flags))
+	if (!try_grab_page(page, addr, flags))
 		return ERR_PTR(-ENOMEM);
 
 	if (flags & FOLL_TOUCH)

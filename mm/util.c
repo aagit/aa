@@ -793,7 +793,8 @@ struct anon_vma *page_anon_vma(struct page *page)
  * This should most likely only be called during fork() to see whether we
  * should break the cow immediately for a page on the src mm.
  */
-bool page_needs_cow_for_dma(struct vm_area_struct *vma, struct page *page)
+bool page_needs_cow_for_dma(struct vm_area_struct *vma, struct page *page,
+			    bool compound)
 {
 	bool copy;
 	int val;
@@ -805,6 +806,13 @@ bool page_needs_cow_for_dma(struct vm_area_struct *vma, struct page *page)
 		return false;
 
 	if (!PageAnon(page))
+		return false;
+
+	VM_BUG_ON(compound && !PageHead(page));
+	if (compound) {
+		if (!READ_ONCE(*compound_anon_gup(page)))
+			return false;
+	} else if (!PageAnonGup(page))
 		return false;
 
 	/*

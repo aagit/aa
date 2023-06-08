@@ -234,6 +234,50 @@ static void put_page_refs(struct page *page, int refs)
 	put_page(page);
 }
 
+static inline void __set_compound_anon_gup(struct page *head)
+{
+	if (PageHead(head) && head_compound_mapcount(head)) {
+		/*
+		 * Only set this if there can ever be a COW
+		 * fault on a huge pmd. COW faults on PTE
+		 * mapped THP only care about the subpage not
+		 * to end up being mapped read-write in the
+		 * child, not the whole THP.
+		 */
+		if (!READ_ONCE(*compound_anon_gup(head)))
+			WRITE_ONCE(*compound_anon_gup(head), true);
+	}
+}
+
+static inline void set_compound_anon_gup(struct page *head)
+{
+	if (PageHeadAnonNoKsm(head))
+		__set_compound_anon_gup(head);
+}
+
+static void set_anon_gup_addr(struct page *page, unsigned long addr)
+{
+	bool need_subpage;
+	struct page *head = compound_head(page);
+
+	if (!PageHeadAnonNoKsm(head))
+		return;
+
+	need_subpage = true;
+	if (PageHead(head)) {
+		if (!PageHuge(head))
+			page = head + page_trans_huge_subpage_idx(addr);
+		else {
+			VM_BUG_ON(!PageHead(page));
+			need_subpage = false;
+		}
+		__set_compound_anon_gup(head);
+	}
+
+	if (!PageAnonGup(page) && need_subpage)
+		SetPageAnonGup(page);
+}
+
 /*
  * Return the compound head page with ref appropriately incremented,
  * or NULL if that failed.
@@ -260,6 +304,8 @@ static inline struct page *try_get_compound_head(struct page *page, int refs)
 		put_page_refs(head, refs);
 		return NULL;
 	}
+
+	set_compound_anon_gup(head);
 
 	return head;
 }
@@ -378,13 +424,19 @@ static void put_compound_head(struct page *page, int refs, unsigned int flags)
  * nor FOLL_GET was set, nothing is done). False for failure: FOLL_GET or
  * FOLL_PIN was set, but the page could not be grabbed.
  */
-bool __must_check try_grab_page(struct page *page, unsigned int flags)
+bool __must_check try_grab_page(struct page *page, unsigned long addr,
+				unsigned int flags)
 {
+	bool grabbed;
+
 	WARN_ON_ONCE((flags & (FOLL_GET | FOLL_PIN)) == (FOLL_GET | FOLL_PIN));
 
-	if (flags & FOLL_GET)
-		return try_get_page(page);
-	else if (flags & FOLL_PIN) {
+	if (flags & FOLL_GET) {
+		grabbed = try_get_page(page);
+		if (grabbed)
+			set_anon_gup_addr(page, addr);
+		return grabbed;
+	} else if (flags & FOLL_PIN) {
 		int refs = 1;
 
 		page = compound_head(page);
@@ -404,6 +456,7 @@ bool __must_check try_grab_page(struct page *page, unsigned int flags)
 		 * once, so that the page really is pinned.
 		 */
 		page_ref_add(page, refs);
+		set_anon_gup_addr(page, addr);
 
 		mod_node_page_state(page_pgdat(page), NR_FOLL_PIN_ACQUIRED, 1);
 	}
@@ -768,7 +821,7 @@ retry:
 		goto out;
 	}
 	/* try_grab_page() does nothing unless FOLL_GET or FOLL_PIN is set. */
-	if (unlikely(!try_grab_page(page, flags))) {
+	if (unlikely(!try_grab_page(page, address, flags))) {
 		page = ERR_PTR(-ENOMEM);
 		goto out;
 	}
@@ -1130,7 +1183,7 @@ static int get_gate_page(struct mm_struct *mm, unsigned long address,
 			goto unmap;
 		*page = pte_page(*pte);
 	}
-	if (unlikely(!try_grab_page(*page, gup_flags))) {
+	if (unlikely(!try_grab_page(*page, address, gup_flags))) {
 		ret = -ENOMEM;
 		goto unmap;
 	}
@@ -2615,6 +2668,10 @@ static int gup_pte_range(pmd_t pmd, pmd_t *pmdp, unsigned long addr,
 				goto pte_unmap;
 			}
 		}
+
+		if (PageAnonNoKsm(page) && !PageAnonGup(page))
+			SetPageAnonGup(page);
+
 		SetPageReferenced(page);
 		pages[*nr] = page;
 		(*nr)++;
@@ -2668,7 +2725,7 @@ static int __gup_device_huge(unsigned long pfn, unsigned long addr,
 		}
 		SetPageReferenced(page);
 		pages[*nr] = page;
-		if (unlikely(!try_grab_page(page, flags))) {
+		if (unlikely(!try_grab_page(page, addr, flags))) {
 			undo_dev_pagemap(nr, nr_start, flags, pages);
 			ret = 0;
 			break;
@@ -2745,6 +2802,16 @@ static int record_subpages(struct page *page, unsigned long addr,
 	return nr;
 }
 
+static void anongup_subpages(struct page *page, unsigned long addr,
+			    unsigned long end)
+{
+	if (!PageAnonNoKsm(page) || PageHuge(page))
+		return;
+	for (; addr != end; addr += PAGE_SIZE, page++)
+		if (!PageAnonGup(page))
+			SetPageAnonGup(page);
+}
+
 #ifdef CONFIG_ARCH_HAS_HUGEPD
 static unsigned long hugepte_addr_end(unsigned long addr, unsigned long end,
 				      unsigned long sz)
@@ -2786,6 +2853,8 @@ static int gup_hugepte(pte_t *ptep, unsigned long sz, unsigned long addr,
 		put_compound_head(head, refs, flags);
 		return 0;
 	}
+
+	anongup_subpages(page, addr, end);
 
 	*nr += refs;
 	SetPageReferenced(head);
@@ -2856,6 +2925,8 @@ static int gup_huge_pmd(pmd_t orig, pmd_t *pmdp, unsigned long addr,
 		return 0;
 	}
 
+	anongup_subpages(page, addr, end);
+
 	*nr += refs;
 	SetPageReferenced(head);
 	return 1;
@@ -2890,6 +2961,8 @@ static int gup_huge_pud(pud_t orig, pud_t *pudp, unsigned long addr,
 		return 0;
 	}
 
+	anongup_subpages(page, addr, end);
+
 	*nr += refs;
 	SetPageReferenced(head);
 	return 1;
@@ -2918,6 +2991,8 @@ static int gup_huge_pgd(pgd_t orig, pgd_t *pgdp, unsigned long addr,
 		put_compound_head(head, refs, flags);
 		return 0;
 	}
+
+	anongup_subpages(page, addr, end);
 
 	*nr += refs;
 	SetPageReferenced(head);
