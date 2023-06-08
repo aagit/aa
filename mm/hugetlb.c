@@ -4383,7 +4383,8 @@ again:
 			 * need to be without the pgtable locks since we could
 			 * sleep during the process.
 			 */
-			if (unlikely(page_needs_cow_for_dma(vma, ptepage))) {
+			if (unlikely(page_needs_cow_for_dma(vma, ptepage,
+							    true))) {
 				pte_t src_pte_old = entry;
 				struct page *new;
 
@@ -6290,7 +6291,7 @@ retry:
 		 * in any way. So this page must be available at this point,
 		 * unless the page refcount overflowed:
 		 */
-		if (WARN_ON_ONCE(!try_grab_page(page, flags))) {
+		if (WARN_ON_ONCE(!try_grab_page(page, address, flags))) {
 			page = NULL;
 			goto out;
 		}
