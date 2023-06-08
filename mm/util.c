@@ -806,6 +806,12 @@ bool page_needs_cow_for_dma(struct vm_area_struct *vma, struct page *page)
 	if (!PageAnon(page))
 		return false;
 
+	if (PageCompound(page)) {
+		if (!READ_ONCE(*compound_anon_gup(compound_head(page))))
+			return false;
+	} else if (!PageAnonGup(page))
+		return false;
+
 	/*
 	 * If page_count is == 1 there cannot be any GUP pin and
 	 * further GUP pins are prevented with write_protect_seq.
