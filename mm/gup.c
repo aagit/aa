@@ -234,6 +234,23 @@ static void put_page_refs(struct page *page, int refs)
 	put_page(page);
 }
 
+static inline void set_anon_gup(struct page *head, struct page *page)
+{
+	bool skip_tail;
+
+	if (PageHeadAnonNoKsm(head)) {
+		skip_tail = false;
+		if (PageHead(head)) {
+			if (!READ_ONCE(*compound_anon_gup(head)))
+				WRITE_ONCE(*compound_anon_gup(head), true);
+			if (unlikely(PageHuge(head)))
+				skip_tail = true;
+		}
+		if (!PageAnonGup(page) && !skip_tail)
+			SetPageAnonGup(page);
+	}
+}
+
 /*
  * Return the compound head page with ref appropriately incremented,
  * or NULL if that failed.
@@ -260,6 +277,8 @@ static inline struct page *try_get_compound_head(struct page *page, int refs)
 		put_page_refs(head, refs);
 		return NULL;
 	}
+
+	set_anon_gup(head, page);
 
 	return head;
 }
@@ -380,11 +399,16 @@ static void put_compound_head(struct page *page, int refs, unsigned int flags)
  */
 bool __must_check try_grab_page(struct page *page, unsigned int flags)
 {
+	bool grabbed;
+
 	WARN_ON_ONCE((flags & (FOLL_GET | FOLL_PIN)) == (FOLL_GET | FOLL_PIN));
 
-	if (flags & FOLL_GET)
-		return try_get_page(page);
-	else if (flags & FOLL_PIN) {
+	if (flags & FOLL_GET) {
+		grabbed = try_get_page(page);
+		if (grabbed)
+			set_anon_gup(compound_head(page), page);
+		return grabbed;
+	} else if (flags & FOLL_PIN) {
 		int refs = 1;
 
 		page = compound_head(page);
@@ -404,6 +428,7 @@ bool __must_check try_grab_page(struct page *page, unsigned int flags)
 		 * once, so that the page really is pinned.
 		 */
 		page_ref_add(page, refs);
+		set_anon_gup(compound_head(page), page);
 
 		mod_node_page_state(page_pgdat(page), NR_FOLL_PIN_ACQUIRED, 1);
 	}
