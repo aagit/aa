@@ -1219,7 +1219,8 @@ static inline void get_page(struct page *page)
 	page_ref_inc(page);
 }
 
-bool __must_check try_grab_page(struct page *page, unsigned int flags);
+bool __must_check try_grab_page(struct page *page, unsigned long addr,
+				unsigned int flags);
 struct page *try_grab_compound_head(struct page *page, int refs,
 				    unsigned int flags);
 
@@ -1341,7 +1342,8 @@ static inline bool is_cow_mapping(vm_flags_t flags)
 }
 
 extern bool page_needs_cow_for_dma(struct vm_area_struct *vma,
-				   struct page *page);
+				   struct page *page,
+				   bool compound);
 
 #if defined(CONFIG_SPARSEMEM) && !defined(CONFIG_SPARSEMEM_VMEMMAP)
 #define SECTION_IN_PAGE_FLAGS
