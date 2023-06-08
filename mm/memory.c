@@ -3715,6 +3715,17 @@ static vm_fault_t remove_device_exclusive_entry(struct vm_fault *vmf)
 	struct mmu_notifier_range range;
 
 	/*
+	 * PG_anon_gup reuses PG_mappedtodisk for anon pages. A swap pte
+	 * must never point at an anonymous page in the swapcache that is
+	 * PG_anon_gup. Sanity check that this holds and especially, that
+	 * no filesystem set PG_mappedtodisk on a page in the swapcache. Sanity
+	 * check after taking the PT lock and making sure that nobody
+	 * concurrently faulted in this page and set PG_anon_gup.
+	 */
+	BUG_ON(!PageAnon(page) && PageMappedToDisk(page));
+	BUG_ON(PageAnon(page) && PageAnonGup(page));
+
+	/*
 	 * We need a reference to lock the page because we don't hold
 	 * the PTL so a racing thread can remove the device-exclusive
 	 * entry and unmap it. If the page is free the entry must

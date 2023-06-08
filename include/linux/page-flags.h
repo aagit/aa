@@ -185,6 +185,8 @@ enum pageflags {
 
 	/* Only valid for buddy pages. Used to track pages that are reported */
 	PG_reported = PG_uptodate,
+
+	PG_anon_gup = PG_mappedtodisk,
 };
 
 #define PAGEFLAGS_MASK		((1UL << NR_PAGEFLAGS) - 1)
@@ -628,6 +630,19 @@ TESTPAGEFLAG_FALSE(Huge)
 TESTPAGEFLAG_FALSE(HeadHuge)
 #endif
 
+static __always_inline int PageAnonGup(struct page *page)
+{
+       VM_BUG_ON_PAGE(!PageAnon(page), page);
+       VM_BUG_ON_PAGE(PageHuge(page) && !PageHead(page), page);
+       return test_bit(PG_anon_gup, &PF_ANY(page, 1)->flags);
+}
+
+static __always_inline void SetPageAnonGup(struct page *page)
+{
+       VM_BUG_ON_PAGE(!PageAnonNoKsm(page), page);
+       VM_BUG_ON_PAGE(PageHuge(page) && !PageHead(page), page);
+       set_bit(PG_anon_gup, &PF_ANY(page, 1)->flags);
+}
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 /*
