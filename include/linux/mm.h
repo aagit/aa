@@ -1343,7 +1343,7 @@ static inline bool is_cow_mapping(vm_flags_t flags)
 
 extern bool page_needs_cow_for_dma(struct vm_area_struct *vma,
 				   struct page *page,
-				   bool compound);
+				   bool compound, int mappings);
 
 #if defined(CONFIG_SPARSEMEM) && !defined(CONFIG_SPARSEMEM_VMEMMAP)
 #define SECTION_IN_PAGE_FLAGS
