@@ -4384,7 +4384,7 @@ again:
 			 * sleep during the process.
 			 */
 			if (unlikely(page_needs_cow_for_dma(vma, ptepage,
-							    true))) {
+							    true, 1))) {
 				pte_t src_pte_old = entry;
 				struct page *new;
 
