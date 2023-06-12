@@ -883,8 +883,7 @@ copy_nonpresent_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 static inline int
 copy_present_page(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		  pte_t *dst_pte, pte_t *src_pte, unsigned long addr, int *rss,
-		  struct page **prealloc, pte_t pte, struct page *page,
-		  int mappings)
+		  struct page **prealloc, pte_t pte, struct page *page)
 {
 	struct page *new_page;
 
@@ -901,7 +900,7 @@ copy_present_page(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 	 * the page count. That might give false positives for
 	 * for pinning, but it will work correctly.
 	 */
-	if (likely(!page_needs_cow_for_dma(src_vma, page, false, mappings)))
+	if (likely(!page_needs_cow_for_dma(src_vma, page, false)))
 		return 1;
 
 	new_page = *prealloc;
@@ -930,125 +929,13 @@ copy_present_page(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 }
 
 /*
- * How many times this THP is mapped in this mm. It must hold the
- * mmap_lock for writing to prevent the ptes to change or it will not
- * return a stable value. It's safe to return a value lower than the
- * mappings in the current mm. It's not safe to return a value higher
- * than the mappings.
- *
- * NOTE: unlike fork(), the COW fault cannot call this to avoid the
- * false positive copies on splitted THP mappings.
- */
-static inline int count_thp_mappings(struct mm_struct *mm,
-				     pte_t *src_pte,
-				     unsigned long addr)
-{
-	unsigned long pfn = pte_pfn(*src_pte);
-	unsigned int count, offset;
-	unsigned long start, end, pstart, pend;
-	pte_t *orig_src_pte = src_pte;
-	int found;
-	pmd_t *pmd;
-
-	mmap_assert_write_locked(mm);
-
-	/* go beyond vmas, but stay within the pte */
-	start = addr & HPAGE_PMD_MASK;
-	end = start + HPAGE_PMD_SIZE;
-
-	/* pfn range of the THP */
-	pstart = pfn & ~(HPAGE_PMD_NR-1);
-	pend = pstart + HPAGE_PMD_NR;
-
-	offset = (addr - start) >> PAGE_SHIFT;
-	offset = min(offset, (unsigned int) (pfn - pstart));
-	VM_BUG_ON(offset >= HPAGE_PMD_NR);
-
-	pfn -= offset;
-	src_pte -= offset;
-	found = count = 0;
-	for (addr = addr - (offset << PAGE_SHIFT);
-	     addr < end && pfn < pend;
-	     addr += PAGE_SIZE, pfn++, src_pte++) {
-		VM_BUG_ON(addr < start);
-		VM_BUG_ON(addr >= end);
-		VM_BUG_ON(pfn < pstart);
-		VM_BUG_ON(pfn >= pend);
-
-		if (orig_src_pte == src_pte)
-			found++;
-
-		if (pte_present(*src_pte) && pte_pfn(*src_pte) == pfn)
-			count++;
-	}
-	VM_BUG_ON(found != 1);
-	VM_BUG_ON(count < 1);
-
-	if (pfn == pend) {
-		/* the thp starts before "start" */
-		if (addr != end) {
-			addr -= HPAGE_PMD_SIZE;
-			pfn -= HPAGE_PMD_NR;
-
-			end -= HPAGE_PMD_SIZE;
-			start = HPAGE_PMD_SIZE;
-			pmd = mm_find_pmd(mm, addr);
-			if (!pmd)
-				goto out;
-			src_pte = pte_offset_map(pmd, addr);
-			for (; addr < end && pfn < pend;
-			     addr += PAGE_SIZE, pfn++, src_pte++) {
-				VM_BUG_ON(addr < start);
-				VM_BUG_ON(addr >= end);
-				VM_BUG_ON(pfn < pstart);
-				VM_BUG_ON(pfn >= pend);
-
-				VM_BUG_ON(orig_src_pte == src_pte);
-
-				if (pte_present(*src_pte) &&
-				    pte_pfn(*src_pte) == pfn)
-					count++;
-			}
-			pte_unmap(src_pte);
-		}
-	} else {
-		VM_BUG_ON(addr != end);
-
-		/* the thp ends after "end" */
-		pmd = mm_find_pmd(mm, addr);
-		if (!pmd)
-			goto out;
-		start += HPAGE_PMD_SIZE;
-		end += HPAGE_PMD_SIZE;
-		src_pte = pte_offset_map(pmd, addr);
-		for (; addr < end && pfn < pend;
-		     addr += PAGE_SIZE, pfn++, src_pte++) {
-			VM_BUG_ON(addr < start);
-			VM_BUG_ON(addr >= end);
-			VM_BUG_ON(pfn < pstart);
-			VM_BUG_ON(pfn >= pend);
-
-			VM_BUG_ON(orig_src_pte == src_pte);
-
-			if (pte_present(*src_pte) && pte_pfn(*src_pte) == pfn)
-				count++;
-		}
-		pte_unmap(src_pte);
-	}
-
-out:
-	return count;
-}
-
-/*
  * Copy one pte.  Returns 0 if succeeded, or -EAGAIN if one preallocated page
  * is required to copy this pte.
  */
 static inline int
 copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		 pte_t *dst_pte, pte_t *src_pte, unsigned long addr, int *rss,
-		 struct page **prealloc,
-		 int *last_thp_mappings, struct page **last_thp)
+		 struct page **prealloc)
 {
 	struct mm_struct *src_mm = src_vma->vm_mm;
 	unsigned long vm_flags = src_vma->vm_flags;
@@ -1057,26 +944,10 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 
 	page = vm_normal_page(src_vma, addr, pte);
 	if (page) {
-		int retval, mappings;
-		struct page *head;
-
-		mappings = 0;
-		head = compound_head(page);
-		if (PageTransHuge(head)) {
-			mappings = *last_thp_mappings;
-			if (!mappings || head != *last_thp) {
-				mappings = count_thp_mappings(src_mm,
-							      src_pte, addr);
-				*last_thp_mappings = mappings;
-				*last_thp = head;
-				VM_BUG_ON_PAGE(page_count(head) < mappings,
-					       page);
-			}
-		}
+		int retval;
 
 		retval = copy_present_page(dst_vma, src_vma, dst_pte, src_pte,
-					   addr, rss, prealloc, pte, page,
-					   mappings ? : 1);
+					   addr, rss, prealloc, pte, page);
 		if (retval <= 0)
 			return retval;
 
@@ -1131,8 +1002,7 @@ page_copy_prealloc(struct mm_struct *src_mm, struct vm_area_struct *vma,
 static int
 copy_pte_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	       pmd_t *dst_pmd, pmd_t *src_pmd, unsigned long addr,
-	       unsigned long end,
-	       int *last_thp_mappings, struct page **last_thp)
+	       unsigned long end)
 {
 	struct mm_struct *dst_mm = dst_vma->vm_mm;
 	struct mm_struct *src_mm = src_vma->vm_mm;
@@ -1198,8 +1068,7 @@ again:
 		}
 		/* copy_present_pte() will clear `*prealloc' if consumed */
 		ret = copy_present_pte(dst_vma, src_vma, dst_pte, src_pte,
-				       addr, rss, &prealloc,
-				       last_thp_mappings, last_thp);
+				       addr, rss, &prealloc);
 		/*
 		 * If we need a pre-allocated page for this pte, drop the
 		 * locks, allocate, and try again.
@@ -1263,8 +1132,6 @@ copy_pmd_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	struct mm_struct *src_mm = src_vma->vm_mm;
 	pmd_t *src_pmd, *dst_pmd;
 	unsigned long next;
-	int last_thp_mappings = 0;
-	struct page *last_thp;
 
 	dst_pmd = pmd_alloc(dst_mm, dst_pud, addr);
 	if (!dst_pmd)
@@ -1287,8 +1154,7 @@ copy_pmd_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		if (pmd_none_or_clear_bad(src_pmd))
 			continue;
 		if (copy_pte_range(dst_vma, src_vma, dst_pmd, src_pmd,
-				   addr, next,
-				   &last_thp_mappings, &last_thp))
+				   addr, next))
 			return -ENOMEM;
 	} while (dst_pmd++, src_pmd++, addr = next, addr != end);
 	return 0;
