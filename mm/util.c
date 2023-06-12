@@ -794,7 +794,7 @@ struct anon_vma *page_anon_vma(struct page *page)
  * should break the cow immediately for a page on the src mm.
  */
 bool page_needs_cow_for_dma(struct vm_area_struct *vma, struct page *page,
-			    bool compound, int mappings)
+			    bool compound)
 {
 	bool copy;
 	int val;
@@ -816,12 +816,12 @@ bool page_needs_cow_for_dma(struct vm_area_struct *vma, struct page *page,
 		return false;
 
 	/*
-	 * If page_count is == mappings there cannot be any GUP pin
-	 * and further GUP pins are prevented with write_protect_seq.
+	 * If page_count is == 1 there cannot be any GUP pin and
+	 * further GUP pins are prevented with write_protect_seq.
 	 */
 	val = page_count(page);
-	VM_WARN_ON_ONCE_PAGE(val < mappings, page);
-	if (val == mappings)
+	VM_WARN_ON_ONCE_PAGE(val < 1, page);
+	if (val == 1)
 		return false;
 
 	/*
@@ -842,8 +842,8 @@ bool page_needs_cow_for_dma(struct vm_area_struct *vma, struct page *page,
 	copy = true;
 	if (PageSwapCache(page) && trylock_page(page)) {
 		val = page_count(page) - PageSwapCache(page);
-		VM_WARN_ON_ONCE_PAGE(val < mappings, page);
-		copy = val != mappings;
+		VM_WARN_ON_ONCE_PAGE(val < 1, page);
+		copy = val != 1;
 		unlock_page(page);
 	}
 
