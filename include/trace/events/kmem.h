@@ -391,6 +391,41 @@ TRACE_EVENT(rss_stat,
 		__print_symbolic(__entry->member, TRACE_MM_PAGES),
 		__entry->size)
 	);
+
+#ifdef DEFINE_EVENT_WRITABLE
+#undef MM_DEFINE_EVENT
+#define MM_DEFINE_EVENT(template, call, proto, args, size)		\
+	DEFINE_EVENT_WRITABLE(template, call, PARAMS(proto),		\
+			      PARAMS(args), size)
+#else
+#undef MM_DEFINE_EVENT
+#define MM_DEFINE_EVENT(template, call, proto, args, size)		\
+	DEFINE_EVENT(template, call, PARAMS(proto), PARAMS(args))
+#endif
+
+DECLARE_EVENT_CLASS(bpf_prefault_template,
+	TP_PROTO(struct bpf_prefault_data *bpf_prefault_data,
+		 unsigned int version),
+	TP_ARGS(bpf_prefault_data, version),
+	TP_STRUCT__entry(
+		__field(struct bpf_prefault_data *, bpf_prefault_data)
+		__field(unsigned int, version)
+	),
+	TP_fast_assign(
+		__entry->bpf_prefault_data = 0;
+		__entry->version = 0;
+	),
+	TP_printk("bpf_prefault_data=%p version=%u",
+		  __entry->bpf_prefault_data,
+		  __entry->version)
+);
+
+MM_DEFINE_EVENT(bpf_prefault_template, bpf_prefault,
+	TP_PROTO(struct bpf_prefault_data *bpf_prefault_data,
+		 unsigned int version),
+	TP_ARGS(bpf_prefault_data, version),
+	sizeof(struct bpf_prefault_data)
+);
 #endif /* _TRACE_KMEM_H */
 
 /* This part must be outside protection */

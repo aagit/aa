@@ -5105,6 +5105,8 @@ static inline void mm_account_fault(struct pt_regs *regs,
 		perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS_MIN, 1, regs, address);
 }
 
+#include "bpf_prefault.c"
+
 /*
  * By the time we get here, we already hold the mm semaphore
  *
@@ -5138,8 +5140,11 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 
 	if (unlikely(is_vm_hugetlb_page(vma)))
 		ret = hugetlb_fault(vma->vm_mm, vma, address, flags);
-	else
+	else {
+		if (unlikely(trace_bpf_prefault_enabled()))
+			bpf_prefault(vma, address, flags);
 		ret = __handle_mm_fault(vma, address, flags);
+	}
 
 	if (flags & FAULT_FLAG_USER) {
 		mem_cgroup_exit_user_fault();

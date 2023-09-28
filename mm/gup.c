@@ -1507,8 +1507,8 @@ out:
 	return i ? i : ret;
 }
 
-static bool vma_permits_fault(struct vm_area_struct *vma,
-			      unsigned int fault_flags)
+bool vma_permits_fault(struct vm_area_struct *vma,
+		       unsigned int fault_flags)
 {
 	bool write   = !!(fault_flags & FAULT_FLAG_WRITE);
 	bool foreign = !!(fault_flags & FAULT_FLAG_REMOTE);

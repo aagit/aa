@@ -32,6 +32,7 @@
 #include <linux/sched.h>
 #include <linux/pgtable.h>
 #include <linux/kasan.h>
+#include <linux/bpf_prefault.h>
 
 struct mempolicy;
 struct anon_vma;
@@ -1771,6 +1772,8 @@ int invalidate_inode_page(struct page *page);
 extern vm_fault_t handle_mm_fault(struct vm_area_struct *vma,
 				  unsigned long address, unsigned int flags,
 				  struct pt_regs *regs);
+extern bool vma_permits_fault(struct vm_area_struct *vma,
+			      unsigned int fault_flags);
 extern int fixup_user_fault(struct mm_struct *mm,
 			    unsigned long address, unsigned int fault_flags,
 			    bool *unlocked);
