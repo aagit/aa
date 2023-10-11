@@ -394,10 +394,16 @@ static void emit_indirect_jump(u8 **pprog, int reg, u8 *ip)
 	u8 *prog = *pprog;
 
 #ifdef CONFIG_RETPOLINE
-	if (cpu_feature_enabled(X86_FEATURE_RETPOLINE_LFENCE)) {
+	bool can_read_memory = true;
+	if (sysctl_unprivileged_bpf_disabled != 1 ||
+	    security_locked_down(LOCKDOWN_BPF_READ_KERNEL) < 0)
+		can_read_memory = false;
+	if (!can_read_memory &&
+	    cpu_feature_enabled(X86_FEATURE_RETPOLINE_LFENCE)) {
 		EMIT_LFENCE();
 		EMIT2(0xFF, 0xE0 + reg);
-	} else if (cpu_feature_enabled(X86_FEATURE_RETPOLINE)) {
+	} else if (!can_read_memory &&
+		   cpu_feature_enabled(X86_FEATURE_RETPOLINE)) {
 		emit_jump(&prog, &__x86_indirect_thunk_array[reg], ip);
 	} else
 #endif
